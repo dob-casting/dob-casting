@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audition Details</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background: #f0f2f5;
+      margin: 0;
+      padding: 16px;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 32px 24px;
+      width: 100%;
+      max-width: 480px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+      margin-top: 24px;
+      text-align: center;
+    }
+
+    .logo {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: #aaa;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      font-size: 22px;
+      margin: 0 0 8px;
+      color: #1a1a1a;
+    }
+
+    .actor-name {
+      font-size: 20px;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin-bottom: 4px;
+    }
+
+    .actor-role {
+      font-size: 15px;
+      color: #666;
+      margin-bottom: 20px;
+    }
+
+    .time-block {
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 28px;
+    }
+
+    .time-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #999;
+      margin-bottom: 4px;
+    }
+
+    .time-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: #1a1a1a;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    button {
+      flex: 1;
+      padding: 16px 12px;
+      font-size: 16px;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    button:active { opacity: 0.8; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-confirm  { background: #28a745; color: white; }
+    .btn-decline  { background: #dc3545; color: white; }
+    .btn-change   { background: #007bff; color: white; width: 100%; flex: none; font-size: 15px; padding: 14px; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #eee;
+      margin: 24px 0;
+    }
+
+    #reschedule-div { display: none; }
+
+    #reschedule-div h3 {
+      font-size: 16px;
+      color: #333;
+      margin: 0 0 12px;
+    }
+
+    select {
+      width: 100%;
+      padding: 14px 12px;
+      font-size: 15px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      background: white;
+      margin-bottom: 12px;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23666' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+    }
+
+    #message {
+      font-size: 17px;
+      color: #333;
+      line-height: 1.5;
+      display: none;
+    }
+
+    #message.success { color: #155724; }
+    #message.error   { color: #721c24; }
+
+    #loading {
+      color: #888;
+      font-size: 15px;
+      padding: 20px 0;
+    }
+
+    #content { display: none; }
+
+    .spinner {
+      display: inline-block;
+      width: 20px; height: 20px;
+      border: 3px solid #ddd;
+      border-top-color: #007bff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">Debbie O'Brien Casting</div>
+
+    <div id="loading"><span class="spinner"></span> Loading your audition details…</div>
+
+    <div id="content">
+      <div class="actor-name" id="actor-name"></div>
+      <div class="actor-role">Role: <span id="actor-role"></span></div>
+
+      <div class="time-block">
+        <div class="time-label">Your audition time</div>
+        <div class="time-value" id="actor-time"></div>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn-confirm" onclick="doAction('confirm')">Confirm</button>
+        <button class="btn-decline" onclick="doAction('decline')">Decline</button>
+      </div>
+      <button class="btn-change" onclick="showReschedule()">Request a Different Time</button>
+
+      <div id="reschedule-div">
+        <hr class="divider">
+        <h3>Choose an available time:</h3>
+        <select id="new-time-select"></select>
+        <button class="btn-change" style="background:#17a2b8" onclick="submitReschedule()">Lock In New Time</button>
+      </div>
+    </div>
+
+    <div id="message"></div>
+  </div>
+
+  <script>
+    const API_BASE = "https://oaltkxblacpjjecpauya.supabase.co/functions/v1";
+    const params = new URLSearchParams(window.location.search);
+    const token  = params.get("id") || params.get("token"); // support both
+
+    function showLoading(text) {
+      document.getElementById("loading").innerHTML = `<span class="spinner"></span> ${text}`;
+      document.getElementById("loading").style.display = "block";
+      document.getElementById("content").style.display = "none";
+      document.getElementById("message").style.display = "none";
+    }
+
+    function showMessage(text, type = "") {
+      const el = document.getElementById("message");
+      el.textContent = text;
+      el.className = type;
+      el.style.display = "block";
+      document.getElementById("loading").style.display = "none";
+      document.getElementById("content").style.display = "none";
+    }
+
+    if (!token) {
+      showMessage("This link is invalid or has expired.", "error");
+    } else {
+      fetch(`${API_BASE}/actor-view?token=${encodeURIComponent(token)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (!data || !data.name) {
+            showMessage("Audition details not found. This link may have expired.", "error");
+            return;
+          }
+          document.getElementById("actor-name").textContent  = data.name;
+          document.getElementById("actor-role").textContent  = data.role;
+          document.getElementById("actor-time").textContent  = data.datetime;
+          document.getElementById("loading").style.display   = "none";
+          document.getElementById("content").style.display   = "block";
+        })
+        .catch(() => showMessage("Something went wrong. Please try again later.", "error"));
+    }
+
+    function doAction(type) {
+      showLoading(type === "confirm" ? "Confirming your audition…" : "Updating schedule…");
+      fetch(`${API_BASE}/actor-action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: type }),
+      })
+        .then(r => r.json())
+        .then(d => showMessage(d.message || (d.error ? "Error: " + d.error : "Done."), d.error ? "error" : "success"))
+        .catch(() => showMessage("Something went wrong. Please try again.", "error"));
+    }
+
+    function showReschedule() {
+      document.getElementById("reschedule-div").style.display = "block";
+      const sel = document.getElementById("new-time-select");
+      sel.innerHTML = "<option>Loading available times…</option>";
+
+      fetch(`${API_BASE}/available-slots?token=${encodeURIComponent(token)}`)
+        .then(r => r.json())
+        .then(slots => {
+          sel.innerHTML = "";
+          if (!slots || slots.length === 0) {
+            sel.innerHTML = "<option>No other times available right now</option>";
+            return;
+          }
+          slots.forEach(s => {
+            const opt = document.createElement("option");
+            opt.value = s.id;
+            opt.textContent = s.display;
+            sel.appendChild(opt);
+          });
+        })
+        .catch(() => { sel.innerHTML = "<option>Could not load times. Try again.</option>"; });
+    }
+
+    function submitReschedule() {
+      const newSlotId = document.getElementById("new-time-select").value;
+      if (!newSlotId || newSlotId.length < 10) return;
+      showLoading("Locking in your new time…");
+      fetch(`${API_BASE}/actor-action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "reschedule", new_slot_id: newSlotId }),
+      })
+        .then(r => r.json())
+        .then(d => showMessage(d.message || (d.error ? "Error: " + d.error : "Done."), d.error ? "error" : "success"))
+        .catch(() => showMessage("Something went wrong. Please try again.", "error"));
+    }
+  </script>
+</body>
+</html>
