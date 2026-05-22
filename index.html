@@ -152,14 +152,15 @@
     <div class="add-form">
       <input type="text"  id="tbin-first"  placeholder="First name">
       <input type="text"  id="tbin-last"   placeholder="Last name">
+      <input type="text"  id="tbin-agent"  placeholder="Agent (optional)">
       <input type="email" id="tbin-email"  placeholder="Email">
       <input type="text"  id="tbin-role"   placeholder="Role">
       <button class="btn-success" onclick="addToTBIN()">Add to Queue</button>
       <button class="btn-secondary" onclick="toggleTBINBulk()">Bulk Import</button>
     </div>
     <div id="tbin-bulk-form" style="display:none;margin-top:12px;padding:12px;background:#f8f9fa;border-radius:6px;">
-      <p style="margin:0 0 8px;font-size:13px;color:#555">Paste four columns from a spreadsheet: <strong>First Name, Last Name, Email, Role</strong> — one actor per row.</p>
-      <textarea id="tbin-bulk-input" rows="8" style="width:100%;font-family:monospace;font-size:13px;padding:8px;border:1px solid #ccc;border-radius:4px;" placeholder="John&#9;Smith&#9;john@example.com&#9;Actor&#10;Jane&#9;Doe&#9;jane@example.com&#9;Singer"></textarea>
+      <p style="margin:0 0 8px;font-size:13px;color:#555">Paste five columns from a spreadsheet: <strong>First Name, Last Name, Agent, Email, Role</strong> — one actor per row. Agent is optional (leave blank).</p>
+      <textarea id="tbin-bulk-input" rows="8" style="width:100%;font-family:monospace;font-size:13px;padding:8px;border:1px solid #ccc;border-radius:4px;" placeholder="John&#9;Smith&#9;BigAgency&#9;john@example.com&#9;Actor&#10;Jane&#9;Doe&#9;&#9;jane@example.com&#9;Singer"></textarea>
       <div class="row" style="margin-top:8px">
         <button class="btn-success" onclick="bulkAddTBIN()">Import</button>
         <button class="btn-secondary" onclick="toggleTBINBulk()">Cancel</button>
@@ -168,23 +169,20 @@
     </div>
   </div>
 
-  <!-- Email Templates -->
-  <div class="card" id="templates-card" style="display:none">
+  <!-- Email Templates (Gmail Drafts) -->
+  <div class="card">
     <h2>Email Templates</h2>
-    <p style="color:#666;margin-top:0">Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code></p>
-    <div class="template-tabs">
-      <button class="tab-btn active" onclick="showTemplate('initial_invite', this)">Initial Invite</button>
-      <button class="tab-btn" onclick="showTemplate('declined_notification', this)">Declined</button>
-      <button class="tab-btn" onclick="showTemplate('reschedule_confirmation', this)">Reschedule</button>
-    </div>
-    <div>
-      <label style="font-size:13px;font-weight:bold">Subject</label>
-      <input type="text" id="tmpl-subject" style="width:100%;margin:6px 0 12px">
-      <label style="font-size:13px;font-weight:bold">HTML Body</label>
-      <textarea id="tmpl-body" rows="10"></textarea>
-      <button class="btn-primary" style="margin-top:8px" onclick="saveTemplate()">Save Template</button>
-      <span class="status-msg" id="tmpl-status"></span>
-    </div>
+    <p style="color:#666;margin-top:0">Templates are Gmail drafts. In Gmail, create a draft for each template and apply the matching label:</p>
+    <table style="font-size:13px;border-collapse:collapse;margin-bottom:12px">
+      <tr>
+        <th style="text-align:left;padding:6px 16px 6px 0;color:#555;font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Template</th>
+        <th style="text-align:left;padding:6px 0;color:#555;font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Gmail Label to apply</th>
+      </tr>
+      <tr><td style="padding:4px 16px 4px 0">Initial invite</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-invite</code></td></tr>
+      <tr><td style="padding:4px 16px 4px 0">Declined notification</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-declined</code></td></tr>
+      <tr><td style="padding:4px 16px 4px 0">Reschedule confirmation</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-reschedule</code></td></tr>
+    </table>
+    <p style="color:#666;font-size:13px;margin:0">Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Agent}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code></p>
   </div>
 
   <!-- Email Queue Status -->
@@ -205,7 +203,6 @@
 
   let adminSecret = "";
   let currentProjectId = null;
-  let currentTemplateName = "initial_invite";
   let editingSlotId = null;
 
   function headers() {
@@ -216,8 +213,12 @@
   }
 
   async function api(path, opts = {}) {
-    const res = await fetch(`${API_BASE}/${path}`, { ...opts, headers: { ...headers(), ...(opts.headers ?? {}) } });
-    return res.json().catch(() => ({ error: "Invalid response" }));
+    try {
+      const res = await fetch(`${API_BASE}/${path}`, { ...opts, headers: { ...headers(), ...(opts.headers ?? {}) } });
+      return res.json().catch(() => ({ error: "Invalid response" }));
+    } catch (err) {
+      return { error: String(err) };
+    }
   }
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
@@ -232,8 +233,6 @@
     document.getElementById("auth-gate").style.display = "none";
     document.getElementById("app").style.display = "block";
     populateProjectDropdown(data);
-    loadTemplates();
-    document.getElementById("templates-card").style.display = "block";
     document.getElementById("email-queue-card").style.display = "block";
     loadEmailQueue();
     return true;
@@ -331,14 +330,18 @@
     if (data.length === 0) { el.innerHTML = '<p class="loading-text">No slots yet. Add some above.</p>'; return; }
 
     el.innerHTML = `<table>
-      <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th>Role</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th>Role</th><th>Status</th><th>Link</th><th></th></tr></thead>
       <tbody>${data.map(s => {
+        const linkCell = s.short_link
+          ? `<a href="${s.short_link}" target="_blank" style="font-size:12px;color:#007bff;text-decoration:none" title="${s.short_link}">🔗 Copy</a>`
+          : '<span style="color:#ccc">—</span>';
         if (editingSlotId === s.id) {
           return `<tr id="row-${s.id}">
             <td><input type="date" id="edit-date-${s.id}" value="${s.slot_date}" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px"></td>
             <td><input type="time" id="edit-time-${s.id}" value="${s.slot_time?.slice(0,5)}" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px"></td>
             <td colspan="2">${s.first_name ? `${s.first_name} ${s.last_name}` : '<span style="color:#ccc">—</span>'}</td>
             <td><span class="badge badge-${s.status}">${s.status.replace(/_/g,' ')}</span></td>
+            <td>${linkCell}</td>
             <td style="white-space:nowrap">
               <button class="btn-success" style="padding:4px 10px;font-size:12px" onclick="saveSlot('${s.id}')">Save</button>
               <button class="btn-secondary" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="cancelEdit()">Cancel</button>
@@ -351,6 +354,7 @@
           <td>${s.first_name ? `${s.first_name} ${s.last_name}` : '<span style="color:#ccc">—</span>'}</td>
           <td>${s.role || '<span style="color:#ccc">—</span>'}</td>
           <td><span class="badge badge-${s.status}">${s.status.replace(/_/g,' ')}</span></td>
+          <td>${linkCell}</td>
           <td style="white-space:nowrap">
             <button class="btn-secondary" style="padding:4px 10px;font-size:12px" onclick="startEdit('${s.id}')">Edit</button>
             ${s.first_name ? `<button class="btn-danger" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="removeActor('${s.id}')">Remove</button>` : ''}
@@ -480,7 +484,7 @@
     el.innerHTML = data.map(a => `
       <div class="tbin-item">
         <div>
-          <div class="name">${a.first_name} ${a.last_name}</div>
+          <div class="name">${a.first_name} ${a.last_name}${a.agent ? ` <span style="font-weight:normal;color:#888;font-size:13px">via ${a.agent}</span>` : ''}</div>
           <div class="role">${a.role} · <span class="email">${a.email}</span></div>
         </div>
         <button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="removeFromTBIN('${a.id}')">Remove</button>
@@ -490,16 +494,18 @@
   async function addToTBIN() {
     const first = document.getElementById("tbin-first").value.trim();
     const last  = document.getElementById("tbin-last").value.trim();
+    const agent = document.getElementById("tbin-agent").value.trim();
     const email = document.getElementById("tbin-email").value.trim();
     const role  = document.getElementById("tbin-role").value.trim();
-    if (!first || !last || !email || !role) { alert("Please fill all fields."); return; }
+    if (!first || !last || !email || !role) { alert("Please fill all required fields."); return; }
 
     await api("admin-tbin", {
       method: "POST",
-      body: JSON.stringify({ action: "add", first_name: first, last_name: last, email, role }),
+      body: JSON.stringify({ action: "add", first_name: first, last_name: last, agent: agent || null, email, role }),
     });
     document.getElementById("tbin-first").value = "";
     document.getElementById("tbin-last").value = "";
+    document.getElementById("tbin-agent").value = "";
     document.getElementById("tbin-email").value = "";
     document.getElementById("tbin-role").value = "";
     loadTBIN();
@@ -519,12 +525,21 @@
   function parseTBINBulk(raw) {
     const actors = [];
     for (const line of raw.split("\n")) {
-      const parts = line.trim().split(/\t|,/);
+      const parts = line.trim().split(/\t|,/).map(p => p.trim());
       if (parts.length < 4) continue;
-      const [first_name, last_name, email, role] = parts.map(p => p.trim());
+      // Support both 4-column (no agent) and 5-column (with agent) formats
+      let first_name, last_name, agent, email, role;
+      if (parts.length >= 5 && parts[3].includes("@")) {
+        // 5-col: first, last, agent, email, role
+        [first_name, last_name, agent, email, role] = parts;
+      } else {
+        // 4-col: first, last, email, role
+        [first_name, last_name, email, role] = parts;
+        agent = "";
+      }
       if (!first_name || !last_name || !email || !role) continue;
       if (!email.includes("@")) continue;
-      actors.push({ first_name, last_name, email, role });
+      actors.push({ first_name, last_name, agent: agent || null, email, role });
     }
     return actors;
   }
@@ -548,44 +563,6 @@
       document.getElementById("tbin-bulk-input").value = "";
       loadTBIN();
     }
-  }
-
-  // ─── Email Templates ───────────────────────────────────────────────────────
-  let templates = {};
-
-  async function loadTemplates() {
-    const data = await api("admin-templates");
-    (data || []).forEach(t => { templates[t.name] = t; });
-    showTemplate(currentTemplateName, document.querySelector(".tab-btn.active"));
-  }
-
-  function showTemplate(name, btn) {
-    currentTemplateName = name;
-    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-    if (btn) btn.classList.add("active");
-    const t = templates[name] || { subject: "", html_body: "" };
-    document.getElementById("tmpl-subject").value = t.subject;
-    document.getElementById("tmpl-body").value = t.html_body;
-    document.getElementById("tmpl-status").textContent = "";
-  }
-
-  async function saveTemplate() {
-    const subject = document.getElementById("tmpl-subject").value;
-    const html_body = document.getElementById("tmpl-body").value;
-    const data = await api("admin-templates", {
-      method: "POST",
-      body: JSON.stringify({ name: currentTemplateName, subject, html_body }),
-    });
-    const status = document.getElementById("tmpl-status");
-    if (data.ok) {
-      templates[currentTemplateName] = { name: currentTemplateName, subject, html_body };
-      status.textContent = "Saved.";
-      status.style.color = "#28a745";
-    } else {
-      status.textContent = data.error || "Failed to save.";
-      status.style.color = "#dc3545";
-    }
-    setTimeout(() => { status.textContent = ""; }, 3000);
   }
 
   // ─── Email Queue ───────────────────────────────────────────────────────────
