@@ -104,6 +104,13 @@
       <input type="text" id="new-project-name" placeholder="New project name" style="width:200px">
       <button class="btn-primary" onclick="createProject()">Create Project</button>
     </div>
+    <div id="project-actions" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #eee">
+      <div class="row">
+        <input type="text" id="rename-input" placeholder="New name" style="width:180px">
+        <button class="btn-secondary" onclick="renameProject()">Rename</button>
+        <button class="btn-danger" style="margin-left:auto" onclick="deleteProject()">Delete Project</button>
+      </div>
+    </div>
   </div>
 
   <!-- Fill initial schedule -->
@@ -147,7 +154,13 @@
 
   <!-- TBIN Queue -->
   <div class="card" id="tbin-card" style="display:none">
-    <h2>TBIN Queue</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:0">
+      <h2 style="margin:0;border:none;padding:0">TBIN Queue</h2>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="tbin-pause-label" style="font-size:13px"></span>
+        <button id="tbin-pause-btn" style="font-size:12px;padding:5px 12px" onclick="toggleTBINPause()"></button>
+      </div>
+    </div>
     <div id="tbin-list"><p class="loading-text">Loading queue...</p></div>
     <div class="add-form">
       <input type="text"  id="tbin-first"  placeholder="First name">
@@ -203,6 +216,8 @@
 
   let adminSecret = "";
   let currentProjectId = null;
+  let currentProjectTBINPaused = false;
+  let allProjects = [];
   let editingSlotId = null;
 
   function headers() {
@@ -262,9 +277,10 @@
 
   // ─── Projects ──────────────────────────────────────────────────────────────
   function populateProjectDropdown(projects) {
+    allProjects = projects || [];
     const sel = document.getElementById("project-select");
     sel.innerHTML = '<option value="">— Select project —</option>';
-    (projects || []).forEach(p => {
+    allProjects.forEach(p => {
       const opt = document.createElement("option");
       opt.value = p.id;
       opt.textContent = p.name;
@@ -292,12 +308,81 @@
 
   function loadProject() {
     currentProjectId = document.getElementById("project-select").value;
-    if (!currentProjectId) return;
+    if (!currentProjectId) {
+      document.getElementById("project-actions").style.display = "none";
+      return;
+    }
+    const proj = allProjects.find(p => p.id === currentProjectId);
+    currentProjectTBINPaused = proj?.tbin_paused ?? false;
+    document.getElementById("project-actions").style.display = "block";
+    document.getElementById("rename-input").value = "";
     document.getElementById("fill-card").style.display = "block";
     document.getElementById("schedule-card").style.display = "block";
     document.getElementById("tbin-card").style.display = "block";
+    updateTBINPauseUI();
     loadSchedule();
     loadTBIN();
+  }
+
+  async function renameProject() {
+    const name = document.getElementById("rename-input").value.trim();
+    if (!name) return;
+    if (!confirm(`Rename to "${name}"?`)) return;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "rename", id: currentProjectId, name }),
+    });
+    if (data.error) { alert(data.error); return; }
+    document.getElementById("rename-input").value = "";
+    const projects = await api("admin-projects");
+    populateProjectDropdown(projects);
+    document.getElementById("project-select").value = currentProjectId;
+  }
+
+  async function deleteProject() {
+    const proj = allProjects.find(p => p.id === currentProjectId);
+    if (!confirm(`Delete "${proj?.name}"? This will permanently delete all slots and cannot be undone.`)) return;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "delete", id: currentProjectId }),
+    });
+    if (data.error) { alert(data.error); return; }
+    currentProjectId = null;
+    ["fill-card","schedule-card","tbin-card","project-actions"].forEach(id => {
+      document.getElementById(id).style.display = "none";
+    });
+    const projects = await api("admin-projects");
+    populateProjectDropdown(projects);
+  }
+
+  async function toggleTBINPause() {
+    const newPaused = !currentProjectTBINPaused;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "set_tbin_paused", id: currentProjectId, paused: newPaused }),
+    });
+    if (data.error) { alert(data.error); return; }
+    currentProjectTBINPaused = newPaused;
+    // Update in local cache too
+    const proj = allProjects.find(p => p.id === currentProjectId);
+    if (proj) proj.tbin_paused = newPaused;
+    updateTBINPauseUI();
+  }
+
+  function updateTBINPauseUI() {
+    const label = document.getElementById("tbin-pause-label");
+    const btn   = document.getElementById("tbin-pause-btn");
+    if (currentProjectTBINPaused) {
+      label.textContent = "Auto-fill paused";
+      label.style.color = "#dc3545";
+      btn.textContent   = "Resume";
+      btn.className     = "btn-success";
+    } else {
+      label.textContent = "Auto-fill on";
+      label.style.color = "#28a745";
+      btn.textContent   = "Pause";
+      btn.className     = "btn-secondary";
+    }
   }
 
   // ─── Fill Initial Schedule ─────────────────────────────────────────────────
