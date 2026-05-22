@@ -73,6 +73,29 @@
 
     .status-msg { margin-top: 8px; font-size: 13px; color: #555; }
     .loading-text { color: #888; font-style: italic; }
+
+    /* Scrollable table wrapper for mobile */
+    .table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    /* Mobile responsive */
+    @media (max-width: 640px) {
+      body { padding: 10px; }
+      h1 { font-size: 20px; }
+      .card { padding: 14px; }
+      .card h2 { font-size: 16px; }
+      .row { flex-direction: column; align-items: stretch; }
+      .row > * { width: 100% !important; min-width: 0 !important; }
+      select, input[type=text], input[type=date], input[type=time], input[type=email] {
+        width: 100%; font-size: 16px; /* prevents iOS zoom */
+      }
+      button { width: 100%; }
+      .add-form { flex-direction: column; }
+      .add-form input { width: 100%; min-width: 0; }
+      table { font-size: 12px; }
+      th, td { padding: 7px 5px; }
+      /* Hide less critical columns on mobile */
+      .col-email, .col-agent { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -195,7 +218,15 @@
       <tr><td style="padding:4px 16px 4px 0">Declined notification</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-declined</code></td></tr>
       <tr><td style="padding:4px 16px 4px 0">Reschedule confirmation</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-reschedule</code></td></tr>
     </table>
-    <p style="color:#666;font-size:13px;margin:0">Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Agent}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code></p>
+    <p style="color:#666;font-size:13px;margin:0 0 16px">Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Agent}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code></p>
+    <details style="margin-top:4px">
+      <summary style="cursor:pointer;font-size:13px;color:#666;user-select:none">Gmail not sending drafts? Re-authorise here</summary>
+      <div style="margin-top:12px;padding:12px;background:#fff3cd;border-radius:6px;font-size:13px;color:#856404">
+        <p style="margin:0 0 10px">If Gmail drafts aren't being read, the OAuth token may need to be updated with the <code>gmail.modify</code> scope.</p>
+        <button class="btn-primary" style="font-size:13px;padding:8px 16px" onclick="startGmailReauth()">Re-authorise Gmail Access</button>
+        <p style="margin:10px 0 0;color:#666">After authorising, copy the refresh token shown and update the <strong>GMAIL_REFRESH_TOKEN</strong> secret in your Supabase project settings.</p>
+      </div>
+    </details>
   </div>
 
   <!-- Email Queue Status -->
@@ -414,17 +445,18 @@
     if (!data || data.error) { el.innerHTML = `<p style="color:red">${data?.error || "Error"}</p>`; return; }
     if (data.length === 0) { el.innerHTML = '<p class="loading-text">No slots yet. Add some above.</p>'; return; }
 
-    el.innerHTML = `<table>
-      <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th>Role</th><th>Status</th><th>Link</th><th></th></tr></thead>
+    el.innerHTML = `<div class="table-scroll"><table>
+      <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th class="col-agent">Agent</th><th>Role</th><th>Status</th><th>Link</th><th></th></tr></thead>
       <tbody>${data.map(s => {
         const linkCell = s.short_link
-          ? `<a href="${s.short_link}" target="_blank" style="font-size:12px;color:#007bff;text-decoration:none" title="${s.short_link}">🔗 Copy</a>`
+          ? `<button onclick="copyLink('${s.short_link}')" style="padding:3px 8px;font-size:12px;background:#e9ecef;color:#333;border:1px solid #ccc;border-radius:4px;cursor:pointer" title="${s.short_link}">🔗 Copy</button>`
           : '<span style="color:#ccc">—</span>';
         if (editingSlotId === s.id) {
           return `<tr id="row-${s.id}">
             <td><input type="date" id="edit-date-${s.id}" value="${s.slot_date}" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px"></td>
             <td><input type="time" id="edit-time-${s.id}" value="${s.slot_time?.slice(0,5)}" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px"></td>
             <td colspan="2">${s.first_name ? `${s.first_name} ${s.last_name}` : '<span style="color:#ccc">—</span>'}</td>
+            <td class="col-agent">${s.agent || '<span style="color:#ccc">—</span>'}</td>
             <td><span class="badge badge-${s.status}">${s.status.replace(/_/g,' ')}</span></td>
             <td>${linkCell}</td>
             <td style="white-space:nowrap">
@@ -437,6 +469,7 @@
           <td>${formatDate(s.slot_date)}</td>
           <td>${s.slot_time?.slice(0,5)}</td>
           <td>${s.first_name ? `${s.first_name} ${s.last_name}` : '<span style="color:#ccc">—</span>'}</td>
+          <td class="col-agent" style="color:#666;font-size:13px">${s.agent || '<span style="color:#ccc">—</span>'}</td>
           <td>${s.role || '<span style="color:#ccc">—</span>'}</td>
           <td><span class="badge badge-${s.status}">${s.status.replace(/_/g,' ')}</span></td>
           <td>${linkCell}</td>
@@ -447,7 +480,7 @@
         </tr>`;
       }).join("")}
       </tbody>
-    </table>`;
+    </table></div>`;
   }
 
   function startEdit(slotId) { editingSlotId = slotId; loadSchedule(); }
@@ -657,7 +690,7 @@
     if (!data || data.error) { el.innerHTML = `<p style="color:red">${data?.error || "Error"}</p>`; return; }
     if (data.length === 0) { el.innerHTML = '<p class="loading-text">Queue is empty.</p>'; return; }
 
-    el.innerHTML = `<table>
+    el.innerHTML = `<div class="table-scroll"><table>
       <thead><tr><th>Recipient</th><th>Template</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead>
       <tbody>${data.map(r => `
         <tr>
@@ -668,7 +701,7 @@
           <td style="font-size:11px;color:#888;max-width:200px;overflow:hidden;text-overflow:ellipsis">${r.last_error || ''}</td>
         </tr>`).join("")}
       </tbody>
-    </table>`;
+    </table></div>`;
   }
 
   async function triggerEmailQueue() {
@@ -677,7 +710,22 @@
     loadEmailQueue();
   }
 
+  // ─── Gmail Re-auth ─────────────────────────────────────────────────────────
+  async function startGmailReauth() {
+    const data = await api("admin-gmail-auth");
+    if (data.error) { alert("Error: " + data.error); return; }
+    if (!data.url) { alert("Could not generate auth URL."); return; }
+    window.open(data.url, "_blank");
+    alert("Authorize access in the new tab. The page will show you a new refresh token to copy into Supabase secrets.");
+  }
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
+  function copyLink(url) {
+    navigator.clipboard.writeText(url)
+      .then(() => alert("Link copied to clipboard!"))
+      .catch(() => prompt("Copy this link:", url));
+  }
+
   function formatDate(d) {
     if (!d) return "";
     return new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", {

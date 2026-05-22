@@ -43,6 +43,12 @@
   </div>
 
   <script>
+    // Redirect old ?token= links to the new audition page
+    (function() {
+      const p = new URLSearchParams(window.location.search);
+      const t = p.get("token");
+      if (t) window.location.replace("audition?id=" + encodeURIComponent(t));
+    })();
     const params  = new URLSearchParams(window.location.search);
     const token   = params.get("token");
     const API_BASE = "https://oaltkxblacpjjecpauya.supabase.co/functions/v1";
