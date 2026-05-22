@@ -242,8 +242,8 @@
 
 <script>
   // ─── Configuration ─────────────────────────────────────────────────────────
-  // Replace with your Supabase project URL
-  const API_BASE = "https://oaltkxblacpjjecpauya.supabase.co/functions/v1";
+  const API_BASE     = "https://oaltkxblacpjjecpauya.supabase.co/functions/v1";
+  const ACTOR_PORTAL = "https://dob-casting.github.io/audition";
 
   let adminSecret = "";
   let currentProjectId = null;
@@ -448,8 +448,9 @@
     el.innerHTML = `<div class="table-scroll"><table>
       <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th class="col-agent">Agent</th><th>Role</th><th>Status</th><th>Link</th><th></th></tr></thead>
       <tbody>${data.map(s => {
-        const linkCell = s.short_link
-          ? `<button onclick="copyLink('${s.short_link}')" style="padding:3px 8px;font-size:12px;background:#e9ecef;color:#333;border:1px solid #ccc;border-radius:4px;cursor:pointer" title="${s.short_link}">🔗 Copy</button>`
+        const actorLink = s.magic_token ? `${ACTOR_PORTAL}?id=${s.magic_token}` : null;
+        const linkCell = actorLink
+          ? `<button onclick="copyLink('${actorLink}')" style="padding:3px 8px;font-size:12px;background:#e9ecef;color:#333;border:1px solid #ccc;border-radius:4px;cursor:pointer" title="${actorLink}">🔗 Copy</button>`
           : '<span style="color:#ccc">—</span>';
         if (editingSlotId === s.id) {
           return `<tr id="row-${s.id}">
