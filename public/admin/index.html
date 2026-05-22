@@ -116,7 +116,18 @@
     <h2>Schedule</h2>
     <div class="row" style="margin-bottom:12px">
       <button class="btn-secondary" onclick="toggleSlotForm()">+ Add Slot</button>
+      <button class="btn-secondary" onclick="toggleBulkForm()">Bulk Add</button>
       <button class="btn-secondary" onclick="loadSchedule()">Refresh</button>
+    </div>
+
+    <div id="bulk-add-form" style="display:none;margin-top:12px;padding:12px;background:#f8f9fa;border-radius:6px;">
+      <p style="margin:0 0 8px;font-size:13px;color:#555">Paste two columns from Google Sheets (date + time), one row per slot.</p>
+      <textarea id="bulk-slots-input" rows="8" style="width:100%;font-family:monospace;font-size:13px;padding:8px;border:1px solid #ccc;border-radius:4px;" placeholder="04/06/2026&#9;10:00&#10;04/06/2026&#9;10:15&#10;04/06/2026&#9;10:30"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn-success" onclick="bulkAddSlots()">Add Slots</button>
+        <button class="btn-secondary" onclick="toggleBulkForm()">Cancel</button>
+        <span id="bulk-status" style="font-size:13px;color:#555;margin-left:8px"></span>
+      </div>
     </div>
 
     <div id="slot-add-form">
@@ -305,6 +316,71 @@
   function toggleSlotForm() {
     const f = document.getElementById("slot-add-form");
     f.style.display = f.style.display === "none" ? "block" : "none";
+  }
+
+  function toggleBulkForm() {
+    const f = document.getElementById("bulk-add-form");
+    f.style.display = f.style.display === "none" ? "block" : "none";
+    document.getElementById("bulk-status").textContent = "";
+  }
+
+  function parseBulkSlots(raw) {
+    const slots = [];
+    for (const line of raw.split("\n")) {
+      const parts = line.trim().split(/\t|,|  +/);
+      if (parts.length < 2) continue;
+      const datePart = parts[0].trim();
+      const timePart = parts[1].trim();
+
+      // Parse date: DD/MM/YYYY or YYYY-MM-DD
+      let isoDate;
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(datePart)) {
+        const [d, m, y] = datePart.split("/");
+        isoDate = `${y}-${m}-${d}`;
+      } else if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+        isoDate = datePart;
+      } else {
+        continue; // skip unparseable rows (e.g. headers)
+      }
+
+      // Parse time: H:MM, HH:MM, H:MMam/pm
+      let isoTime;
+      const t = timePart.toLowerCase().replace(/\s/g, "");
+      const ampm = t.match(/([ap]m)$/);
+      const hm = t.replace(/[ap]m$/, "").split(":");
+      if (hm.length < 2) continue;
+      let h = parseInt(hm[0], 10);
+      const m2 = hm[1].padStart(2, "0");
+      if (ampm) {
+        if (ampm[1] === "pm" && h !== 12) h += 12;
+        if (ampm[1] === "am" && h === 12) h = 0;
+      }
+      isoTime = `${String(h).padStart(2, "0")}:${m2}`;
+      slots.push({ slot_date: isoDate, slot_time: isoTime });
+    }
+    return slots;
+  }
+
+  async function bulkAddSlots() {
+    const raw = document.getElementById("bulk-slots-input").value;
+    const slots = parseBulkSlots(raw);
+    const status = document.getElementById("bulk-status");
+    if (slots.length === 0) { status.textContent = "No valid slots found. Check the format."; status.style.color = "#dc3545"; return; }
+    status.textContent = `Adding ${slots.length} slots...`;
+    status.style.color = "#555";
+    const data = await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "bulk_add_slots", project_id: currentProjectId, slots }),
+    });
+    if (data.error) {
+      status.textContent = `Error: ${data.error}`;
+      status.style.color = "#dc3545";
+    } else {
+      status.textContent = `Added ${data.inserted} slots.`;
+      status.style.color = "#28a745";
+      document.getElementById("bulk-slots-input").value = "";
+      loadSchedule();
+    }
   }
 
   async function addSlot() {
