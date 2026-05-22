@@ -448,7 +448,8 @@
     el.innerHTML = `<div class="table-scroll"><table>
       <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th class="col-agent">Agent</th><th>Role</th><th>Status</th><th>Link</th><th></th></tr></thead>
       <tbody>${data.map(s => {
-        const actorLink = s.magic_token ? `${ACTOR_PORTAL}?id=${s.magic_token}` : null;
+        const token = s.magic_token || (s.short_link ? new URL(s.short_link).searchParams.get("token") || new URL(s.short_link).searchParams.get("id") : null);
+        const actorLink = s.first_name && token ? `${ACTOR_PORTAL}?id=${token}` : null;
         const linkCell = actorLink
           ? `<button onclick="copyLink('${actorLink}')" style="padding:3px 8px;font-size:12px;background:#e9ecef;color:#333;border:1px solid #ccc;border-radius:4px;cursor:pointer" title="${actorLink}">🔗 Copy</button>`
           : '<span style="color:#ccc">—</span>';
