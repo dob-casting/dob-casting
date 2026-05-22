@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audition Status</title>
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; max-width: 500px; margin: auto; text-align: center; }
+      .box { border: 1px solid #ccc; padding: 20px; border-radius: 8px; box-shadow: 2px 2px 12px #aaa; }
+
+      /* Fat-finger friendly buttons */
+      button { padding: 14px 20px; margin: 10px 2%; cursor: pointer; border: none; border-radius: 8px; color: white; font-weight: bold; width: 45%; font-size: 16px; }
+      .btn-confirm { background-color: #28a745; }
+      .btn-decline { background-color: #dc3545; }
+      .btn-change  { background-color: #007bff; width: 94%; margin-top: 15px; }
+
+      /* Mobile-optimized dropdown */
+      select { padding: 12px; width: 94%; margin: 15px 0; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; background-color: #f9f9f9; }
+
+      #reschedule-div { display: none; margin-top: 25px; padding-top: 20px; border-top: 1px solid #eee; }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <h2>Audition Status</h2>
+      <div id="loading">Finding audition details...</div>
+
+      <div id="content" style="display:none;">
+        <h3 id="actor-name" style="margin-bottom: 5px;"></h3>
+        <p style="margin-top: 0; color: #666;">Role: <span id="actor-role"></span></p>
+        <p style="font-size: 18px;"><strong>Time:</strong> <span id="actor-time"></span></p>
+
+        <button class="btn-confirm" onclick="action('confirm')">Confirm</button>
+        <button class="btn-decline" onclick="action('decline')">Decline</button><br>
+        <button class="btn-change" onclick="showReschedule()">Request New Time</button>
+
+        <div id="reschedule-div">
+          <h4>Select an available time:</h4>
+          <select id="new-time-select"></select>
+          <button class="btn-change" style="background-color: #17a2b8;" onclick="submitReschedule()">Lock In New Time</button>
+        </div>
+      </div>
+
+      <h3 id="message" style="margin-top: 20px; color: #333;"></h3>
+    </div>
+
+    <script>
+      // Token comes from the URL: ?token=<uuid>
+      // (Previously injected server-side as <?= id ?> in GAS)
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get("token");
+
+      // Base URL for Edge Functions — replace with your Supabase project URL
+      const API_BASE = "https://oaltkxblacpjjecpauya.supabase.co/functions/v1";
+
+      // On load, fetch actor details
+      if (!token) {
+        document.getElementById("loading").innerText = "Link invalid or actor not found.";
+      } else {
+        fetch(`${API_BASE}/actor-view?token=${encodeURIComponent(token)}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(populateData)
+          .catch(() => {
+            document.getElementById("loading").innerText = "Something went wrong. Please try again.";
+          });
+      }
+
+      function populateData(data) {
+        if (!data || !data.name) {
+          document.getElementById("loading").innerText = "Link invalid or actor not found.";
+          return;
+        }
+        document.getElementById("actor-name").innerText = data.name;
+        document.getElementById("actor-role").innerText = data.role;
+        document.getElementById("actor-time").innerText = data.datetime;
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("content").style.display = "block";
+      }
+
+      function action(type) {
+        document.getElementById("content").style.display = "none";
+        document.getElementById("loading").style.display = "block";
+        document.getElementById("loading").innerText = "Updating schedule...";
+
+        fetch(`${API_BASE}/actor-action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, action: type }),
+        })
+          .then(r => r.json())
+          .then(data => showMessage(data.message || (data.error ? "Error: " + data.error : "Done.")))
+          .catch(() => showMessage("Something went wrong. Please try again."));
+      }
+
+      function showReschedule() {
+        document.getElementById("reschedule-div").style.display = "block";
+        document.getElementById("new-time-select").innerHTML = "<option>Loading available times...</option>";
+
+        fetch(`${API_BASE}/available-slots?token=${encodeURIComponent(token)}`)
+          .then(r => r.json())
+          .then(populateDropdown)
+          .catch(() => {
+            document.getElementById("new-time-select").innerHTML = "<option>Could not load slots. Try again.</option>";
+          });
+      }
+
+      function populateDropdown(slots) {
+        const select = document.getElementById("new-time-select");
+        select.innerHTML = "";
+
+        if (!slots || slots.length === 0) {
+          select.innerHTML = "<option>No available slots right now</option>";
+          return;
+        }
+        slots.forEach(slot => {
+          const opt = document.createElement("option");
+          opt.value = slot.id;  // UUID, not row number — stable across DB changes
+          opt.innerText = slot.display;
+          select.appendChild(opt);
+        });
+      }
+
+      function submitReschedule() {
+        const newSlotId = document.getElementById("new-time-select").value;
+        // Validate it looks like a UUID (basic check)
+        if (!newSlotId || newSlotId.length < 10) return;
+
+        document.getElementById("content").style.display = "none";
+        document.getElementById("loading").style.display = "block";
+        document.getElementById("loading").innerText = "Locking in new time and sending confirmation...";
+
+        fetch(`${API_BASE}/actor-action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, action: "reschedule", new_slot_id: newSlotId }),
+        })
+          .then(r => r.json())
+          .then(data => showMessage(data.message || (data.error ? "Error: " + data.error : "Done.")))
+          .catch(() => showMessage("Something went wrong. Please try again."));
+      }
+
+      function showMessage(msg) {
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("reschedule-div").style.display = "none";
+        document.getElementById("content").style.display = "none";
+        document.getElementById("message").innerText = msg;
+      }
+    </script>
+  </body>
+</html>
