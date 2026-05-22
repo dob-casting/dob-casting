@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audition Admin</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+    h1 { color: #333; margin-bottom: 4px; }
+    .subtitle { color: #888; margin-bottom: 24px; font-size: 14px; }
+
+    /* Auth gate */
+    #auth-gate { background: white; border-radius: 8px; padding: 32px; max-width: 400px; margin: 80px auto; box-shadow: 0 2px 12px rgba(0,0,0,0.1); text-align: center; }
+    #auth-gate input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; margin: 12px 0; }
+    #auth-gate button { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }
+
+    /* Main app */
+    #app { display: none; }
+    .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    .card h2 { margin-top: 0; font-size: 18px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+
+    /* Project selector */
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    select, input[type=text], input[type=date], input[type=time], input[type=email] {
+      padding: 10px; font-size: 15px; border: 1px solid #ccc; border-radius: 6px; background: white;
+    }
+    select { min-width: 200px; }
+    button { padding: 10px 18px; font-size: 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+    .btn-primary   { background: #007bff; color: white; }
+    .btn-success   { background: #28a745; color: white; }
+    .btn-danger    { background: #dc3545; color: white; }
+    .btn-secondary { background: #6c757d; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Schedule table */
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; padding: 10px 8px; background: #f8f9fa; border-bottom: 2px solid #dee2e6; color: #555; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+    td { padding: 10px 8px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+    .badge-empty       { background: #f0f0f0; color: #999; }
+    .badge-invite_sent { background: #fff3cd; color: #856404; }
+    .badge-confirmed   { background: #d4edda; color: #155724; }
+    .badge-auto_booked { background: #cce5ff; color: #004085; }
+    .badge-rescheduled { background: #fff3cd; color: #856404; }
+    .badge-declined    { background: #f8d7da; color: #721c24; }
+
+    /* TBIN queue */
+    .tbin-item { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid #eee; border-radius: 6px; margin-bottom: 6px; background: white; }
+    .tbin-item .name { flex: 1; font-weight: bold; }
+    .tbin-item .role { color: #666; font-size: 13px; }
+    .tbin-item .email { color: #888; font-size: 12px; }
+    .add-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .add-form input { flex: 1; min-width: 120px; }
+
+    /* Fill button */
+    .fill-btn { width: 100%; padding: 16px; font-size: 18px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+    .fill-btn:disabled { background: #94d3a2; cursor: not-allowed; }
+    #fill-result { margin-top: 12px; padding: 12px; border-radius: 6px; display: none; }
+    #fill-result.success { background: #d4edda; color: #155724; }
+    #fill-result.error   { background: #f8d7da; color: #721c24; }
+
+    /* Slot add form */
+    #slot-add-form { display: none; margin-top: 12px; padding: 12px; background: #f8f9fa; border-radius: 6px; }
+    #slot-add-form .row { gap: 8px; }
+
+    /* Email templates */
+    textarea { width: 100%; padding: 10px; font-size: 13px; border: 1px solid #ccc; border-radius: 6px; font-family: monospace; resize: vertical; }
+    .template-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+    .tab-btn { padding: 8px 14px; border: 1px solid #ccc; background: white; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    .tab-btn.active { background: #007bff; color: white; border-color: #007bff; }
+
+    .status-msg { margin-top: 8px; font-size: 13px; color: #555; }
+    .loading-text { color: #888; font-style: italic; }
+  </style>
+</head>
+<body>
+
+<!-- Auth gate -->
+<div id="auth-gate">
+  <h2>Audition Admin</h2>
+  <p style="color:#666">Enter your admin password to continue.</p>
+  <input type="password" id="secret-input" placeholder="Admin password" onkeydown="if(event.key==='Enter') login()">
+  <button onclick="login()">Sign In</button>
+  <p id="auth-error" style="color:#dc3545;display:none">Incorrect password.</p>
+</div>
+
+<!-- Main app -->
+<div id="app">
+  <h1>Audition Admin</h1>
+  <p class="subtitle">Manage projects, schedule, and TBIN queue.</p>
+
+  <!-- Project selector -->
+  <div class="card">
+    <h2>Project</h2>
+    <div class="row">
+      <select id="project-select" onchange="loadProject()">
+        <option value="">— Select project —</option>
+      </select>
+      <input type="text" id="new-project-name" placeholder="New project name" style="width:200px">
+      <button class="btn-primary" onclick="createProject()">Create Project</button>
+    </div>
+  </div>
+
+  <!-- Fill initial schedule -->
+  <div class="card" id="fill-card" style="display:none">
+    <h2>Fill Initial Schedule</h2>
+    <p style="color:#666;margin-top:0">Assigns actors from the TBIN queue to all empty slots in this project and sends invite emails.</p>
+    <button class="fill-btn" id="fill-btn" onclick="fillSchedule()">Fill Initial Schedule</button>
+    <div id="fill-result"></div>
+  </div>
+
+  <!-- Schedule -->
+  <div class="card" id="schedule-card" style="display:none">
+    <h2>Schedule</h2>
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn-secondary" onclick="toggleSlotForm()">+ Add Slot</button>
+      <button class="btn-secondary" onclick="loadSchedule()">Refresh</button>
+    </div>
+
+    <div id="slot-add-form">
+      <div class="row">
+        <input type="date" id="new-slot-date">
+        <input type="time" id="new-slot-time">
+        <button class="btn-success" onclick="addSlot()">Add Slot</button>
+        <button class="btn-secondary" onclick="toggleSlotForm()">Cancel</button>
+      </div>
+    </div>
+
+    <div id="schedule-table"><p class="loading-text">Loading schedule...</p></div>
+  </div>
+
+  <!-- TBIN Queue -->
+  <div class="card" id="tbin-card" style="display:none">
+    <h2>TBIN Queue</h2>
+    <div id="tbin-list"><p class="loading-text">Loading queue...</p></div>
+    <div class="add-form">
+      <input type="text"  id="tbin-first"  placeholder="First name">
+      <input type="text"  id="tbin-last"   placeholder="Last name">
+      <input type="email" id="tbin-email"  placeholder="Email">
+      <input type="text"  id="tbin-role"   placeholder="Role">
+      <button class="btn-success" onclick="addToTBIN()">Add to Queue</button>
+    </div>
+  </div>
+
+  <!-- Email Templates -->
+  <div class="card" id="templates-card" style="display:none">
+    <h2>Email Templates</h2>
+    <p style="color:#666;margin-top:0">Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code></p>
+    <div class="template-tabs">
+      <button class="tab-btn active" onclick="showTemplate('initial_invite', this)">Initial Invite</button>
+      <button class="tab-btn" onclick="showTemplate('declined_notification', this)">Declined</button>
+      <button class="tab-btn" onclick="showTemplate('reschedule_confirmation', this)">Reschedule</button>
+    </div>
+    <div>
+      <label style="font-size:13px;font-weight:bold">Subject</label>
+      <input type="text" id="tmpl-subject" style="width:100%;margin:6px 0 12px">
+      <label style="font-size:13px;font-weight:bold">HTML Body</label>
+      <textarea id="tmpl-body" rows="10"></textarea>
+      <button class="btn-primary" style="margin-top:8px" onclick="saveTemplate()">Save Template</button>
+      <span class="status-msg" id="tmpl-status"></span>
+    </div>
+  </div>
+
+  <!-- Email Queue Status -->
+  <div class="card" id="email-queue-card" style="display:none">
+    <h2>Email Queue</h2>
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn-primary" onclick="triggerEmailQueue()">Process Queue Now</button>
+      <button class="btn-secondary" onclick="loadEmailQueue()">Refresh</button>
+    </div>
+    <div id="email-queue-table"><p class="loading-text">Loading...</p></div>
+  </div>
+</div>
+
+<script>
+  // ─── Configuration ─────────────────────────────────────────────────────────
+  // Replace with your Supabase project URL
+  const API_BASE = "https://oaltkxblacpjjecpauya.supabase.co/functions/v1";
+
+  let adminSecret = "";
+  let currentProjectId = null;
+  let currentTemplateName = "initial_invite";
+
+  function headers() {
+    return {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${adminSecret}`,
+    };
+  }
+
+  async function api(path, opts = {}) {
+    const res = await fetch(`${API_BASE}/${path}`, { ...opts, headers: { ...headers(), ...(opts.headers ?? {}) } });
+    return res.json().catch(() => ({ error: "Invalid response" }));
+  }
+
+  // ─── Auth ──────────────────────────────────────────────────────────────────
+  async function login() {
+    const val = document.getElementById("secret-input").value.trim();
+    if (!val) return;
+    adminSecret = val;
+
+    // Test the secret by listing projects
+    const data = await api("admin-projects");
+    if (data.error && data.error === "Unauthorized") {
+      document.getElementById("auth-error").style.display = "block";
+      adminSecret = "";
+      return;
+    }
+
+    document.getElementById("auth-gate").style.display = "none";
+    document.getElementById("app").style.display = "block";
+    populateProjectDropdown(data);
+    loadTemplates();
+    document.getElementById("templates-card").style.display = "block";
+    document.getElementById("email-queue-card").style.display = "block";
+    loadEmailQueue();
+  }
+
+  // ─── Projects ──────────────────────────────────────────────────────────────
+  function populateProjectDropdown(projects) {
+    const sel = document.getElementById("project-select");
+    sel.innerHTML = '<option value="">— Select project —</option>';
+    (projects || []).forEach(p => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.name;
+      sel.appendChild(opt);
+    });
+  }
+
+  async function createProject() {
+    const name = document.getElementById("new-project-name").value.trim();
+    if (!name) return;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "create", name }),
+    });
+    if (data.id) {
+      document.getElementById("new-project-name").value = "";
+      const projects = await api("admin-projects");
+      populateProjectDropdown(projects);
+      document.getElementById("project-select").value = data.id;
+      loadProject();
+    } else {
+      alert(data.error || "Failed to create project");
+    }
+  }
+
+  function loadProject() {
+    currentProjectId = document.getElementById("project-select").value;
+    if (!currentProjectId) return;
+    document.getElementById("fill-card").style.display = "block";
+    document.getElementById("schedule-card").style.display = "block";
+    document.getElementById("tbin-card").style.display = "block";
+    loadSchedule();
+    loadTBIN();
+  }
+
+  // ─── Fill Initial Schedule ─────────────────────────────────────────────────
+  async function fillSchedule() {
+    const btn = document.getElementById("fill-btn");
+    const result = document.getElementById("fill-result");
+    btn.disabled = true;
+    btn.textContent = "Filling...";
+    result.style.display = "none";
+
+    const data = await api("fill-initial-schedule", {
+      method: "POST",
+      body: JSON.stringify({ project_id: currentProjectId }),
+    });
+
+    btn.disabled = false;
+    btn.textContent = "Fill Initial Schedule";
+    result.style.display = "block";
+    result.className = data.error ? "error" : "success";
+    result.textContent = data.message || data.error || JSON.stringify(data);
+    loadSchedule();
+    loadTBIN();
+  }
+
+  // ─── Schedule ──────────────────────────────────────────────────────────────
+  async function loadSchedule() {
+    const data = await api(`admin-schedule?project_id=${currentProjectId}`);
+    const el = document.getElementById("schedule-table");
+    if (!data || data.error) { el.innerHTML = `<p style="color:red">${data?.error || "Error"}</p>`; return; }
+    if (data.length === 0) { el.innerHTML = '<p class="loading-text">No slots yet. Add some above.</p>'; return; }
+
+    el.innerHTML = `<table>
+      <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th>Role</th><th>Status</th><th></th></tr></thead>
+      <tbody>${data.map(s => `
+        <tr>
+          <td>${formatDate(s.slot_date)}</td>
+          <td>${s.slot_time?.slice(0,5)}</td>
+          <td>${s.first_name ? `${s.first_name} ${s.last_name}` : '<span style="color:#ccc">—</span>'}</td>
+          <td>${s.role || '<span style="color:#ccc">—</span>'}</td>
+          <td><span class="badge badge-${s.status}">${s.status.replace(/_/g,' ')}</span></td>
+          <td>${s.first_name ? `<button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="removeActor('${s.id}')">Remove</button>` : ''}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+  }
+
+  function toggleSlotForm() {
+    const f = document.getElementById("slot-add-form");
+    f.style.display = f.style.display === "none" ? "block" : "none";
+  }
+
+  async function addSlot() {
+    const date = document.getElementById("new-slot-date").value;
+    const time = document.getElementById("new-slot-time").value;
+    if (!date || !time) return;
+    await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "add_slot", project_id: currentProjectId, slot_date: date, slot_time: time }),
+    });
+    document.getElementById("new-slot-date").value = "";
+    document.getElementById("new-slot-time").value = "";
+    document.getElementById("slot-add-form").style.display = "none";
+    loadSchedule();
+  }
+
+  async function removeActor(slotId) {
+    if (!confirm("Remove actor from this slot? They will be archived and TBIN will auto-fill.")) return;
+    await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "remove_actor", slot_id: slotId }),
+    });
+    loadSchedule();
+    loadTBIN();
+  }
+
+  // ─── TBIN Queue ────────────────────────────────────────────────────────────
+  async function loadTBIN() {
+    const data = await api("admin-tbin");
+    const el = document.getElementById("tbin-list");
+    if (!data || data.error) { el.innerHTML = `<p style="color:red">${data?.error || "Error"}</p>`; return; }
+    if (data.length === 0) { el.innerHTML = '<p class="loading-text">Queue is empty.</p>'; return; }
+
+    el.innerHTML = data.map(a => `
+      <div class="tbin-item">
+        <div>
+          <div class="name">${a.first_name} ${a.last_name}</div>
+          <div class="role">${a.role} · <span class="email">${a.email}</span></div>
+        </div>
+        <button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="removeFromTBIN('${a.id}')">Remove</button>
+      </div>`).join("");
+  }
+
+  async function addToTBIN() {
+    const first = document.getElementById("tbin-first").value.trim();
+    const last  = document.getElementById("tbin-last").value.trim();
+    const email = document.getElementById("tbin-email").value.trim();
+    const role  = document.getElementById("tbin-role").value.trim();
+    if (!first || !last || !email || !role) { alert("Please fill all fields."); return; }
+
+    await api("admin-tbin", {
+      method: "POST",
+      body: JSON.stringify({ action: "add", first_name: first, last_name: last, email, role }),
+    });
+    document.getElementById("tbin-first").value = "";
+    document.getElementById("tbin-last").value = "";
+    document.getElementById("tbin-email").value = "";
+    document.getElementById("tbin-role").value = "";
+    loadTBIN();
+  }
+
+  async function removeFromTBIN(id) {
+    await api("admin-tbin", { method: "POST", body: JSON.stringify({ action: "remove", id }) });
+    loadTBIN();
+  }
+
+  // ─── Email Templates ───────────────────────────────────────────────────────
+  let templates = {};
+
+  async function loadTemplates() {
+    const data = await api("admin-templates");
+    (data || []).forEach(t => { templates[t.name] = t; });
+    showTemplate(currentTemplateName, document.querySelector(".tab-btn.active"));
+  }
+
+  function showTemplate(name, btn) {
+    currentTemplateName = name;
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    if (btn) btn.classList.add("active");
+    const t = templates[name] || { subject: "", html_body: "" };
+    document.getElementById("tmpl-subject").value = t.subject;
+    document.getElementById("tmpl-body").value = t.html_body;
+    document.getElementById("tmpl-status").textContent = "";
+  }
+
+  async function saveTemplate() {
+    const subject = document.getElementById("tmpl-subject").value;
+    const html_body = document.getElementById("tmpl-body").value;
+    const data = await api("admin-templates", {
+      method: "POST",
+      body: JSON.stringify({ name: currentTemplateName, subject, html_body }),
+    });
+    const status = document.getElementById("tmpl-status");
+    if (data.ok) {
+      templates[currentTemplateName] = { name: currentTemplateName, subject, html_body };
+      status.textContent = "Saved.";
+      status.style.color = "#28a745";
+    } else {
+      status.textContent = data.error || "Failed to save.";
+      status.style.color = "#dc3545";
+    }
+    setTimeout(() => { status.textContent = ""; }, 3000);
+  }
+
+  // ─── Email Queue ───────────────────────────────────────────────────────────
+  async function loadEmailQueue() {
+    const data = await api("admin-email-queue");
+    const el = document.getElementById("email-queue-table");
+    if (!data || data.error) { el.innerHTML = `<p style="color:red">${data?.error || "Error"}</p>`; return; }
+    if (data.length === 0) { el.innerHTML = '<p class="loading-text">Queue is empty.</p>'; return; }
+
+    el.innerHTML = `<table>
+      <thead><tr><th>Recipient</th><th>Template</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead>
+      <tbody>${data.map(r => `
+        <tr>
+          <td>${r.recipient_email}</td>
+          <td style="font-size:12px">${r.template_name}</td>
+          <td><span class="badge badge-${r.status === 'sent' ? 'confirmed' : r.status === 'dead' ? 'declined' : r.status === 'failed' ? 'rescheduled' : 'invite_sent'}">${r.status}</span></td>
+          <td>${r.attempts}</td>
+          <td style="font-size:11px;color:#888;max-width:200px;overflow:hidden;text-overflow:ellipsis">${r.last_error || ''}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+  }
+
+  async function triggerEmailQueue() {
+    const data = await api("process-email-queue", { method: "POST", body: "{}" });
+    alert(data.error ? `Error: ${data.error}` : `Processed: ${data.sent} sent, ${data.failed} failed.`);
+    loadEmailQueue();
+  }
+
+  // ─── Helpers ───────────────────────────────────────────────────────────────
+  function formatDate(d) {
+    if (!d) return "";
+    return new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", {
+      weekday: "short", day: "numeric", month: "short", timeZone: "UTC",
+    });
+  }
+</script>
+</body>
+</html>
