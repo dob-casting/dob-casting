@@ -88,7 +88,10 @@
 
 <!-- Main app -->
 <div id="app">
-  <h1>Audition Admin</h1>
+  <div style="display:flex;justify-content:space-between;align-items:baseline">
+    <h1>Audition Admin</h1>
+    <button class="btn-secondary" onclick="signOut()" style="font-size:13px;padding:6px 12px">Sign out</button>
+  </div>
   <p class="subtitle">Manage projects, schedule, and TBIN queue.</p>
 
   <!-- Project selector -->
@@ -152,6 +155,16 @@
       <input type="email" id="tbin-email"  placeholder="Email">
       <input type="text"  id="tbin-role"   placeholder="Role">
       <button class="btn-success" onclick="addToTBIN()">Add to Queue</button>
+      <button class="btn-secondary" onclick="toggleTBINBulk()">Bulk Import</button>
+    </div>
+    <div id="tbin-bulk-form" style="display:none;margin-top:12px;padding:12px;background:#f8f9fa;border-radius:6px;">
+      <p style="margin:0 0 8px;font-size:13px;color:#555">Paste four columns from a spreadsheet: <strong>First Name, Last Name, Email, Role</strong> — one actor per row.</p>
+      <textarea id="tbin-bulk-input" rows="8" style="width:100%;font-family:monospace;font-size:13px;padding:8px;border:1px solid #ccc;border-radius:4px;" placeholder="John&#9;Smith&#9;john@example.com&#9;Actor&#10;Jane&#9;Doe&#9;jane@example.com&#9;Singer"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn-success" onclick="bulkAddTBIN()">Import</button>
+        <button class="btn-secondary" onclick="toggleTBINBulk()">Cancel</button>
+        <span id="tbin-bulk-status" style="font-size:13px;color:#555;margin-left:8px"></span>
+      </div>
     </div>
   </div>
 
@@ -193,6 +206,7 @@
   let adminSecret = "";
   let currentProjectId = null;
   let currentTemplateName = "initial_invite";
+  let editingSlotId = null;
 
   function headers() {
     return {
@@ -207,19 +221,14 @@
   }
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
-  async function login() {
-    const val = document.getElementById("secret-input").value.trim();
-    if (!val) return;
-    adminSecret = val;
-
-    // Test the secret by listing projects
+  async function loginWithSecret(secret) {
+    adminSecret = secret;
     const data = await api("admin-projects");
-    if (data.error && data.error === "Unauthorized") {
-      document.getElementById("auth-error").style.display = "block";
+    if (!data || (data.error && data.error === "Unauthorized")) {
       adminSecret = "";
-      return;
+      return false;
     }
-
+    localStorage.setItem("adminSecret", secret);
     document.getElementById("auth-gate").style.display = "none";
     document.getElementById("app").style.display = "block";
     populateProjectDropdown(data);
@@ -227,7 +236,30 @@
     document.getElementById("templates-card").style.display = "block";
     document.getElementById("email-queue-card").style.display = "block";
     loadEmailQueue();
+    return true;
   }
+
+  async function login() {
+    const val = document.getElementById("secret-input").value.trim();
+    if (!val) return;
+    const ok = await loginWithSecret(val);
+    if (!ok) document.getElementById("auth-error").style.display = "block";
+  }
+
+  function signOut() {
+    localStorage.removeItem("adminSecret");
+    adminSecret = "";
+    currentProjectId = null;
+    document.getElementById("app").style.display = "none";
+    document.getElementById("auth-gate").style.display = "block";
+    document.getElementById("secret-input").value = "";
+  }
+
+  // Auto-login from localStorage
+  (async () => {
+    const saved = localStorage.getItem("adminSecret");
+    if (saved) await loginWithSecret(saved);
+  })();
 
   // ─── Projects ──────────────────────────────────────────────────────────────
   function populateProjectDropdown(projects) {
@@ -300,17 +332,48 @@
 
     el.innerHTML = `<table>
       <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th>Role</th><th>Status</th><th></th></tr></thead>
-      <tbody>${data.map(s => `
-        <tr>
+      <tbody>${data.map(s => {
+        if (editingSlotId === s.id) {
+          return `<tr id="row-${s.id}">
+            <td><input type="date" id="edit-date-${s.id}" value="${s.slot_date}" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px"></td>
+            <td><input type="time" id="edit-time-${s.id}" value="${s.slot_time?.slice(0,5)}" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px"></td>
+            <td colspan="2">${s.first_name ? `${s.first_name} ${s.last_name}` : '<span style="color:#ccc">—</span>'}</td>
+            <td><span class="badge badge-${s.status}">${s.status.replace(/_/g,' ')}</span></td>
+            <td style="white-space:nowrap">
+              <button class="btn-success" style="padding:4px 10px;font-size:12px" onclick="saveSlot('${s.id}')">Save</button>
+              <button class="btn-secondary" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="cancelEdit()">Cancel</button>
+            </td>
+          </tr>`;
+        }
+        return `<tr id="row-${s.id}">
           <td>${formatDate(s.slot_date)}</td>
           <td>${s.slot_time?.slice(0,5)}</td>
           <td>${s.first_name ? `${s.first_name} ${s.last_name}` : '<span style="color:#ccc">—</span>'}</td>
           <td>${s.role || '<span style="color:#ccc">—</span>'}</td>
           <td><span class="badge badge-${s.status}">${s.status.replace(/_/g,' ')}</span></td>
-          <td>${s.first_name ? `<button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="removeActor('${s.id}')">Remove</button>` : ''}</td>
-        </tr>`).join("")}
+          <td style="white-space:nowrap">
+            <button class="btn-secondary" style="padding:4px 10px;font-size:12px" onclick="startEdit('${s.id}')">Edit</button>
+            ${s.first_name ? `<button class="btn-danger" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="removeActor('${s.id}')">Remove</button>` : ''}
+          </td>
+        </tr>`;
+      }).join("")}
       </tbody>
     </table>`;
+  }
+
+  function startEdit(slotId) { editingSlotId = slotId; loadSchedule(); }
+  function cancelEdit() { editingSlotId = null; loadSchedule(); }
+
+  async function saveSlot(slotId) {
+    const slot_date = document.getElementById(`edit-date-${slotId}`).value;
+    const slot_time = document.getElementById(`edit-time-${slotId}`).value;
+    const data = await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "edit_slot", slot_id: slotId, slot_date, slot_time }),
+    });
+    if (data.error) { alert(`Error: ${data.error}`); return; }
+    editingSlotId = null;
+    loadSchedule();
   }
 
   function toggleSlotForm() {
@@ -445,6 +508,46 @@
   async function removeFromTBIN(id) {
     await api("admin-tbin", { method: "POST", body: JSON.stringify({ action: "remove", id }) });
     loadTBIN();
+  }
+
+  function toggleTBINBulk() {
+    const f = document.getElementById("tbin-bulk-form");
+    f.style.display = f.style.display === "none" ? "block" : "none";
+    document.getElementById("tbin-bulk-status").textContent = "";
+  }
+
+  function parseTBINBulk(raw) {
+    const actors = [];
+    for (const line of raw.split("\n")) {
+      const parts = line.trim().split(/\t|,/);
+      if (parts.length < 4) continue;
+      const [first_name, last_name, email, role] = parts.map(p => p.trim());
+      if (!first_name || !last_name || !email || !role) continue;
+      if (!email.includes("@")) continue;
+      actors.push({ first_name, last_name, email, role });
+    }
+    return actors;
+  }
+
+  async function bulkAddTBIN() {
+    const raw = document.getElementById("tbin-bulk-input").value;
+    const actors = parseTBINBulk(raw);
+    const status = document.getElementById("tbin-bulk-status");
+    if (actors.length === 0) { status.textContent = "No valid rows found."; status.style.color = "#dc3545"; return; }
+    status.textContent = `Adding ${actors.length} actors...`;
+    const data = await api("admin-tbin", {
+      method: "POST",
+      body: JSON.stringify({ action: "bulk_add", actors }),
+    });
+    if (data.error) {
+      status.textContent = `Error: ${data.error}`;
+      status.style.color = "#dc3545";
+    } else {
+      status.textContent = `Added ${data.inserted} actors.`;
+      status.style.color = "#28a745";
+      document.getElementById("tbin-bulk-input").value = "";
+      loadTBIN();
+    }
   }
 
   // ─── Email Templates ───────────────────────────────────────────────────────
