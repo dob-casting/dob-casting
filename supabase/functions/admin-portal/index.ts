@@ -1,0 +1,742 @@
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+const HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audition Admin</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+    h1 { color: #333; margin-bottom: 4px; }
+    .subtitle { color: #888; margin-bottom: 24px; font-size: 14px; }
+
+    /* Auth gate */
+    #auth-gate { background: white; border-radius: 8px; padding: 32px; max-width: 400px; margin: 80px auto; box-shadow: 0 2px 12px rgba(0,0,0,0.1); text-align: center; }
+    #auth-gate input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; margin: 12px 0; }
+    #auth-gate button { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }
+
+    /* Main app */
+    #app { display: none; }
+    .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    .card h2 { margin-top: 0; font-size: 18px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+
+    /* Project selector */
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    select, input[type=text], input[type=date], input[type=time], input[type=email] {
+      padding: 10px; font-size: 15px; border: 1px solid #ccc; border-radius: 6px; background: white;
+    }
+    select { min-width: 200px; }
+    button { padding: 10px 18px; font-size: 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+    .btn-primary   { background: #007bff; color: white; }
+    .btn-success   { background: #28a745; color: white; }
+    .btn-danger    { background: #dc3545; color: white; }
+    .btn-secondary { background: #6c757d; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Schedule table */
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; padding: 10px 8px; background: #f8f9fa; border-bottom: 2px solid #dee2e6; color: #555; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+    td { padding: 10px 8px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+    .badge-empty       { background: #f0f0f0; color: #999; }
+    .badge-invite_sent { background: #fff3cd; color: #856404; }
+    .badge-confirmed   { background: #d4edda; color: #155724; }
+    .badge-auto_booked { background: #cce5ff; color: #004085; }
+    .badge-rescheduled { background: #fff3cd; color: #856404; }
+    .badge-declined    { background: #f8d7da; color: #721c24; }
+
+    /* TBIN queue */
+    .tbin-item { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid #eee; border-radius: 6px; margin-bottom: 6px; background: white; }
+    .tbin-item .name { flex: 1; font-weight: bold; }
+    .tbin-item .role { color: #666; font-size: 13px; }
+    .tbin-item .email { color: #888; font-size: 12px; }
+    .add-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .add-form input { flex: 1; min-width: 120px; }
+
+    /* Fill button */
+    .fill-btn { width: 100%; padding: 16px; font-size: 18px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+    .fill-btn:disabled { background: #94d3a2; cursor: not-allowed; }
+    #fill-result { margin-top: 12px; padding: 12px; border-radius: 6px; display: none; }
+    #fill-result.success { background: #d4edda; color: #155724; }
+    #fill-result.error   { background: #f8d7da; color: #721c24; }
+
+    /* Slot add form */
+    #slot-add-form { display: none; margin-top: 12px; padding: 12px; background: #f8f9fa; border-radius: 6px; }
+    #slot-add-form .row { gap: 8px; }
+
+    /* Email templates */
+    textarea { width: 100%; padding: 10px; font-size: 13px; border: 1px solid #ccc; border-radius: 6px; font-family: monospace; resize: vertical; }
+    .template-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+    .tab-btn { padding: 8px 14px; border: 1px solid #ccc; background: white; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    .tab-btn.active { background: #007bff; color: white; border-color: #007bff; }
+
+    .status-msg { margin-top: 8px; font-size: 13px; color: #555; }
+    .loading-text { color: #888; font-style: italic; }
+
+    /* Scrollable table wrapper for mobile */
+    .table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    /* Mobile responsive */
+    @media (max-width: 640px) {
+      body { padding: 10px; }
+      h1 { font-size: 20px; }
+      .card { padding: 14px; }
+      .card h2 { font-size: 16px; }
+      .row { flex-direction: column; align-items: stretch; }
+      .row > * { width: 100% !important; min-width: 0 !important; }
+      select, input[type=text], input[type=date], input[type=time], input[type=email] {
+        width: 100%; font-size: 16px; /* prevents iOS zoom */
+      }
+      button { width: 100%; }
+      .add-form { flex-direction: column; }
+      .add-form input { width: 100%; min-width: 0; }
+      table { font-size: 12px; }
+      th, td { padding: 7px 5px; }
+      /* Hide less critical columns on mobile */
+      .col-email, .col-agent { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Auth gate -->
+<div id="auth-gate">
+  <h2>Audition Admin</h2>
+  <p style="color:#666">Enter your admin password to continue.</p>
+  <input type="password" id="secret-input" placeholder="Admin password" onkeydown="if(event.key==='Enter') login()">
+  <button onclick="login()">Sign In</button>
+  <p id="auth-error" style="color:#dc3545;display:none">Incorrect password.</p>
+</div>
+
+<!-- Main app -->
+<div id="app">
+  <div style="display:flex;justify-content:space-between;align-items:baseline">
+    <h1>Audition Admin</h1>
+    <button class="btn-secondary" onclick="signOut()" style="font-size:13px;padding:6px 12px">Sign out</button>
+  </div>
+  <p class="subtitle">Manage projects, schedule, and TBIN queue.</p>
+
+  <!-- Project selector -->
+  <div class="card">
+    <h2>Project</h2>
+    <div class="row">
+      <select id="project-select" onchange="loadProject()">
+        <option value="">— Select project —</option>
+      </select>
+      <input type="text" id="new-project-name" placeholder="New project name" style="width:200px">
+      <button class="btn-primary" onclick="createProject()">Create Project</button>
+    </div>
+    <div id="project-actions" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #eee">
+      <div class="row">
+        <input type="text" id="rename-input" placeholder="New name" style="width:180px">
+        <button class="btn-secondary" onclick="renameProject()">Rename</button>
+        <button class="btn-danger" style="margin-left:auto" onclick="deleteProject()">Delete Project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fill initial schedule -->
+  <div class="card" id="fill-card" style="display:none">
+    <h2>Fill Initial Schedule</h2>
+    <p style="color:#666;margin-top:0">Assigns actors from the TBIN queue to all empty slots in this project and sends invite emails.</p>
+    <button class="fill-btn" id="fill-btn" onclick="fillSchedule()">Fill Initial Schedule</button>
+    <div id="fill-result"></div>
+  </div>
+
+  <!-- Schedule -->
+  <div class="card" id="schedule-card" style="display:none">
+    <h2>Schedule</h2>
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn-secondary" onclick="toggleSlotForm()">+ Add Slot</button>
+      <button class="btn-secondary" onclick="toggleBulkForm()">Bulk Add</button>
+      <button class="btn-secondary" onclick="loadSchedule()">Refresh</button>
+    </div>
+
+    <div id="bulk-add-form" style="display:none;margin-top:12px;padding:12px;background:#f8f9fa;border-radius:6px;">
+      <p style="margin:0 0 8px;font-size:13px;color:#555">Paste two columns from Google Sheets (date + time), one row per slot.</p>
+      <textarea id="bulk-slots-input" rows="8" style="width:100%;font-family:monospace;font-size:13px;padding:8px;border:1px solid #ccc;border-radius:4px;" placeholder="04/06/2026&#9;10:00&#10;04/06/2026&#9;10:15&#10;04/06/2026&#9;10:30"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn-success" onclick="bulkAddSlots()">Add Slots</button>
+        <button class="btn-secondary" onclick="toggleBulkForm()">Cancel</button>
+        <span id="bulk-status" style="font-size:13px;color:#555;margin-left:8px"></span>
+      </div>
+    </div>
+
+    <div id="slot-add-form">
+      <div class="row">
+        <input type="date" id="new-slot-date">
+        <input type="time" id="new-slot-time">
+        <button class="btn-success" onclick="addSlot()">Add Slot</button>
+        <button class="btn-secondary" onclick="toggleSlotForm()">Cancel</button>
+      </div>
+    </div>
+
+    <div id="schedule-table"><p class="loading-text">Loading schedule...</p></div>
+  </div>
+
+  <!-- TBIN Queue -->
+  <div class="card" id="tbin-card" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:0">
+      <h2 style="margin:0;border:none;padding:0">TBIN Queue</h2>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="tbin-pause-label" style="font-size:13px"></span>
+        <button id="tbin-pause-btn" style="font-size:12px;padding:5px 12px" onclick="toggleTBINPause()"></button>
+      </div>
+    </div>
+    <div id="tbin-list"><p class="loading-text">Loading queue...</p></div>
+    <div class="add-form">
+      <input type="text"  id="tbin-first"  placeholder="First name">
+      <input type="text"  id="tbin-last"   placeholder="Last name">
+      <input type="text"  id="tbin-agent"  placeholder="Agent (optional)">
+      <input type="email" id="tbin-email"  placeholder="Email">
+      <input type="text"  id="tbin-role"   placeholder="Role">
+      <button class="btn-success" onclick="addToTBIN()">Add to Queue</button>
+      <button class="btn-secondary" onclick="toggleTBINBulk()">Bulk Import</button>
+    </div>
+    <div id="tbin-bulk-form" style="display:none;margin-top:12px;padding:12px;background:#f8f9fa;border-radius:6px;">
+      <p style="margin:0 0 8px;font-size:13px;color:#555">Paste five columns from a spreadsheet: <strong>First Name, Last Name, Agent, Email, Role</strong> — one actor per row. Agent is optional (leave blank).</p>
+      <textarea id="tbin-bulk-input" rows="8" style="width:100%;font-family:monospace;font-size:13px;padding:8px;border:1px solid #ccc;border-radius:4px;" placeholder="John&#9;Smith&#9;BigAgency&#9;john@example.com&#9;Actor&#10;Jane&#9;Doe&#9;&#9;jane@example.com&#9;Singer"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn-success" onclick="bulkAddTBIN()">Import</button>
+        <button class="btn-secondary" onclick="toggleTBINBulk()">Cancel</button>
+        <span id="tbin-bulk-status" style="font-size:13px;color:#555;margin-left:8px"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Email Templates (Gmail Drafts) -->
+  <div class="card">
+    <h2>Email Templates</h2>
+    <p style="color:#666;margin-top:0">Templates are Gmail drafts. In Gmail, create a draft for each template and apply the matching label:</p>
+    <table style="font-size:13px;border-collapse:collapse;margin-bottom:12px">
+      <tr>
+        <th style="text-align:left;padding:6px 16px 6px 0;color:#555;font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Template</th>
+        <th style="text-align:left;padding:6px 0;color:#555;font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Gmail Label to apply</th>
+      </tr>
+      <tr><td style="padding:4px 16px 4px 0">Initial invite</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-invite</code></td></tr>
+      <tr><td style="padding:4px 16px 4px 0">Declined notification</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-declined</code></td></tr>
+      <tr><td style="padding:4px 16px 4px 0">Reschedule confirmation</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-reschedule</code></td></tr>
+    </table>
+    <p style="color:#666;font-size:13px;margin:0 0 16px">Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Agent}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code></p>
+    <details style="margin-top:4px">
+      <summary style="cursor:pointer;font-size:13px;color:#666;user-select:none">Gmail not sending drafts? Re-authorise here</summary>
+      <div style="margin-top:12px;padding:12px;background:#fff3cd;border-radius:6px;font-size:13px;color:#856404">
+        <p style="margin:0 0 10px">If Gmail drafts aren't being read, the OAuth token may need to be updated with the <code>gmail.modify</code> scope.</p>
+        <button class="btn-primary" style="font-size:13px;padding:8px 16px" onclick="startGmailReauth()">Re-authorise Gmail Access</button>
+        <p style="margin:10px 0 0;color:#666">After authorising, copy the refresh token shown and update the <strong>GMAIL_REFRESH_TOKEN</strong> secret in your Supabase project settings.</p>
+      </div>
+    </details>
+  </div>
+
+  <!-- Email Queue Status -->
+  <div class="card" id="email-queue-card" style="display:none">
+    <h2>Email Queue</h2>
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn-primary" onclick="triggerEmailQueue()">Process Queue Now</button>
+      <button class="btn-secondary" onclick="loadEmailQueue()">Refresh</button>
+    </div>
+    <div id="email-queue-table"><p class="loading-text">Loading...</p></div>
+  </div>
+</div>
+
+<script>
+  // ─── Configuration ─────────────────────────────────────────────────────────
+  const API_BASE     = "https://oaltkxblacpjjecpauya.supabase.co/functions/v1";
+  const ACTOR_PORTAL = "https://dob-casting.github.io/audition";
+
+  let adminSecret = "";
+  let currentProjectId = null;
+  let currentProjectTBINPaused = false;
+  let allProjects = [];
+  let editingSlotId = null;
+
+  function headers() {
+    return {
+      "Content-Type": "application/json",
+      "Authorization": \`Bearer \${adminSecret}\`,
+    };
+  }
+
+  async function api(path, opts = {}) {
+    try {
+      const res = await fetch(\`\${API_BASE}/\${path}\`, { ...opts, headers: { ...headers(), ...(opts.headers ?? {}) } });
+      return res.json().catch(() => ({ error: "Invalid response" }));
+    } catch (err) {
+      return { error: String(err) };
+    }
+  }
+
+  // ─── Auth ──────────────────────────────────────────────────────────────────
+  async function loginWithSecret(secret) {
+    adminSecret = secret;
+    const data = await api("admin-projects");
+    if (!data || (data.error && data.error === "Unauthorized")) {
+      adminSecret = "";
+      return false;
+    }
+    localStorage.setItem("adminSecret", secret);
+    document.getElementById("auth-gate").style.display = "none";
+    document.getElementById("app").style.display = "block";
+    populateProjectDropdown(data);
+    document.getElementById("email-queue-card").style.display = "block";
+    loadEmailQueue();
+    return true;
+  }
+
+  async function login() {
+    const val = document.getElementById("secret-input").value.trim();
+    if (!val) return;
+    const ok = await loginWithSecret(val);
+    if (!ok) document.getElementById("auth-error").style.display = "block";
+  }
+
+  function signOut() {
+    localStorage.removeItem("adminSecret");
+    adminSecret = "";
+    currentProjectId = null;
+    document.getElementById("app").style.display = "none";
+    document.getElementById("auth-gate").style.display = "block";
+    document.getElementById("secret-input").value = "";
+  }
+
+  // Auto-login from localStorage
+  (async () => {
+    const saved = localStorage.getItem("adminSecret");
+    if (saved) await loginWithSecret(saved);
+  })();
+
+  // ─── Projects ──────────────────────────────────────────────────────────────
+  function populateProjectDropdown(projects) {
+    allProjects = projects || [];
+    const sel = document.getElementById("project-select");
+    sel.innerHTML = '<option value="">— Select project —</option>';
+    allProjects.forEach(p => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.name;
+      sel.appendChild(opt);
+    });
+  }
+
+  async function createProject() {
+    const name = document.getElementById("new-project-name").value.trim();
+    if (!name) return;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "create", name }),
+    });
+    if (data.id) {
+      document.getElementById("new-project-name").value = "";
+      const projects = await api("admin-projects");
+      populateProjectDropdown(projects);
+      document.getElementById("project-select").value = data.id;
+      loadProject();
+    } else {
+      alert(data.error || "Failed to create project");
+    }
+  }
+
+  function loadProject() {
+    currentProjectId = document.getElementById("project-select").value;
+    if (!currentProjectId) {
+      document.getElementById("project-actions").style.display = "none";
+      return;
+    }
+    const proj = allProjects.find(p => p.id === currentProjectId);
+    currentProjectTBINPaused = proj?.tbin_paused ?? false;
+    document.getElementById("project-actions").style.display = "block";
+    document.getElementById("rename-input").value = "";
+    document.getElementById("fill-card").style.display = "block";
+    document.getElementById("schedule-card").style.display = "block";
+    document.getElementById("tbin-card").style.display = "block";
+    updateTBINPauseUI();
+    loadSchedule();
+    loadTBIN();
+  }
+
+  async function renameProject() {
+    const name = document.getElementById("rename-input").value.trim();
+    if (!name) return;
+    if (!confirm(\`Rename to "\${name}"?\`)) return;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "rename", id: currentProjectId, name }),
+    });
+    if (data.error) { alert(data.error); return; }
+    document.getElementById("rename-input").value = "";
+    const projects = await api("admin-projects");
+    populateProjectDropdown(projects);
+    document.getElementById("project-select").value = currentProjectId;
+  }
+
+  async function deleteProject() {
+    const proj = allProjects.find(p => p.id === currentProjectId);
+    if (!confirm(\`Delete "\${proj?.name}"? This will permanently delete all slots and cannot be undone.\`)) return;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "delete", id: currentProjectId }),
+    });
+    if (data.error) { alert(data.error); return; }
+    currentProjectId = null;
+    ["fill-card","schedule-card","tbin-card","project-actions"].forEach(id => {
+      document.getElementById(id).style.display = "none";
+    });
+    const projects = await api("admin-projects");
+    populateProjectDropdown(projects);
+  }
+
+  async function toggleTBINPause() {
+    const newPaused = !currentProjectTBINPaused;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "set_tbin_paused", id: currentProjectId, paused: newPaused }),
+    });
+    if (data.error) { alert(data.error); return; }
+    currentProjectTBINPaused = newPaused;
+    // Update in local cache too
+    const proj = allProjects.find(p => p.id === currentProjectId);
+    if (proj) proj.tbin_paused = newPaused;
+    updateTBINPauseUI();
+  }
+
+  function updateTBINPauseUI() {
+    const label = document.getElementById("tbin-pause-label");
+    const btn   = document.getElementById("tbin-pause-btn");
+    if (currentProjectTBINPaused) {
+      label.textContent = "Auto-fill paused";
+      label.style.color = "#dc3545";
+      btn.textContent   = "Resume";
+      btn.className     = "btn-success";
+    } else {
+      label.textContent = "Auto-fill on";
+      label.style.color = "#28a745";
+      btn.textContent   = "Pause";
+      btn.className     = "btn-secondary";
+    }
+  }
+
+  // ─── Fill Initial Schedule ─────────────────────────────────────────────────
+  async function fillSchedule() {
+    const btn = document.getElementById("fill-btn");
+    const result = document.getElementById("fill-result");
+    btn.disabled = true;
+    btn.textContent = "Filling...";
+    result.style.display = "none";
+
+    const data = await api("fill-initial-schedule", {
+      method: "POST",
+      body: JSON.stringify({ project_id: currentProjectId }),
+    });
+
+    btn.disabled = false;
+    btn.textContent = "Fill Initial Schedule";
+    result.style.display = "block";
+    result.className = data.error ? "error" : "success";
+    result.textContent = data.message || data.error || JSON.stringify(data);
+    loadSchedule();
+    loadTBIN();
+  }
+
+  // ─── Schedule ──────────────────────────────────────────────────────────────
+  async function loadSchedule() {
+    const data = await api(\`admin-schedule?project_id=\${currentProjectId}\`);
+    const el = document.getElementById("schedule-table");
+    if (!data || data.error) { el.innerHTML = \`<p style="color:red">\${data?.error || "Error"}</p>\`; return; }
+    if (data.length === 0) { el.innerHTML = '<p class="loading-text">No slots yet. Add some above.</p>'; return; }
+
+    el.innerHTML = \`<div class="table-scroll"><table>
+      <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th class="col-agent">Agent</th><th>Role</th><th>Status</th><th>Link</th><th></th></tr></thead>
+      <tbody>\${data.map(s => {
+        const actorLink = s.first_name && s.magic_token ? \`\${ACTOR_PORTAL}?id=\${s.magic_token}\` : null;
+        const linkCell = actorLink
+          ? \`<button onclick="copyLink('\${actorLink}')" style="padding:3px 8px;font-size:12px;background:#e9ecef;color:#333;border:1px solid #ccc;border-radius:4px;cursor:pointer" title="\${actorLink}">🔗 Copy</button>\`
+          : '<span style="color:#ccc">—</span>';
+        if (editingSlotId === s.id) {
+          return \`<tr id="row-\${s.id}">
+            <td><input type="date" id="edit-date-\${s.id}" value="\${s.slot_date}" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px"></td>
+            <td><input type="time" id="edit-time-\${s.id}" value="\${s.slot_time?.slice(0,5)}" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px"></td>
+            <td colspan="2">\${s.first_name ? \`\${s.first_name} \${s.last_name}\` : '<span style="color:#ccc">—</span>'}</td>
+            <td class="col-agent">\${s.agent || '<span style="color:#ccc">—</span>'}</td>
+            <td><span class="badge badge-\${s.status}">\${s.status.replace(/_/g,' ')}</span></td>
+            <td>\${linkCell}</td>
+            <td style="white-space:nowrap">
+              <button class="btn-success" style="padding:4px 10px;font-size:12px" onclick="saveSlot('\${s.id}')">Save</button>
+              <button class="btn-secondary" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="cancelEdit()">Cancel</button>
+            </td>
+          </tr>\`;
+        }
+        return \`<tr id="row-\${s.id}">
+          <td>\${formatDate(s.slot_date)}</td>
+          <td>\${s.slot_time?.slice(0,5)}</td>
+          <td>\${s.first_name ? \`\${s.first_name} \${s.last_name}\` : '<span style="color:#ccc">—</span>'}</td>
+          <td class="col-agent" style="color:#666;font-size:13px">\${s.agent || '<span style="color:#ccc">—</span>'}</td>
+          <td>\${s.role || '<span style="color:#ccc">—</span>'}</td>
+          <td><span class="badge badge-\${s.status}">\${s.status.replace(/_/g,' ')}</span></td>
+          <td>\${linkCell}</td>
+          <td style="white-space:nowrap">
+            <button class="btn-secondary" style="padding:4px 10px;font-size:12px" onclick="startEdit('\${s.id}')">Edit</button>
+            \${s.first_name ? \`<button class="btn-danger" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="removeActor('\${s.id}')">Remove</button>\` : ''}
+          </td>
+        </tr>\`;
+      }).join("")}
+      </tbody>
+    </table></div>\`;
+  }
+
+  function startEdit(slotId) { editingSlotId = slotId; loadSchedule(); }
+  function cancelEdit() { editingSlotId = null; loadSchedule(); }
+
+  async function saveSlot(slotId) {
+    const slot_date = document.getElementById(\`edit-date-\${slotId}\`).value;
+    const slot_time = document.getElementById(\`edit-time-\${slotId}\`).value;
+    const data = await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "edit_slot", slot_id: slotId, slot_date, slot_time }),
+    });
+    if (data.error) { alert(\`Error: \${data.error}\`); return; }
+    editingSlotId = null;
+    loadSchedule();
+  }
+
+  function toggleSlotForm() {
+    const f = document.getElementById("slot-add-form");
+    f.style.display = f.style.display === "none" ? "block" : "none";
+  }
+
+  function toggleBulkForm() {
+    const f = document.getElementById("bulk-add-form");
+    f.style.display = f.style.display === "none" ? "block" : "none";
+    document.getElementById("bulk-status").textContent = "";
+  }
+
+  function parseBulkSlots(raw) {
+    const slots = [];
+    for (const line of raw.split("\\n")) {
+      const parts = line.trim().split(/\\t|,|  +/);
+      if (parts.length < 2) continue;
+      const datePart = parts[0].trim();
+      const timePart = parts[1].trim();
+
+      // Parse date: DD/MM/YYYY or YYYY-MM-DD
+      let isoDate;
+      if (/^\\d{2}\\/\\d{2}\\/\\d{4}$/.test(datePart)) {
+        const [d, m, y] = datePart.split("/");
+        isoDate = \`\${y}-\${m}-\${d}\`;
+      } else if (/^\\d{4}-\\d{2}-\\d{2}$/.test(datePart)) {
+        isoDate = datePart;
+      } else {
+        continue; // skip unparseable rows (e.g. headers)
+      }
+
+      // Parse time: H:MM, HH:MM, H:MMam/pm
+      let isoTime;
+      const t = timePart.toLowerCase().replace(/\\s/g, "");
+      const ampm = t.match(/([ap]m)$/);
+      const hm = t.replace(/[ap]m$/, "").split(":");
+      if (hm.length < 2) continue;
+      let h = parseInt(hm[0], 10);
+      const m2 = hm[1].padStart(2, "0");
+      if (ampm) {
+        if (ampm[1] === "pm" && h !== 12) h += 12;
+        if (ampm[1] === "am" && h === 12) h = 0;
+      }
+      isoTime = \`\${String(h).padStart(2, "0")}:\${m2}\`;
+      slots.push({ slot_date: isoDate, slot_time: isoTime });
+    }
+    return slots;
+  }
+
+  async function bulkAddSlots() {
+    const raw = document.getElementById("bulk-slots-input").value;
+    const slots = parseBulkSlots(raw);
+    const status = document.getElementById("bulk-status");
+    if (slots.length === 0) { status.textContent = "No valid slots found. Check the format."; status.style.color = "#dc3545"; return; }
+    status.textContent = \`Adding \${slots.length} slots...\`;
+    status.style.color = "#555";
+    const data = await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "bulk_add_slots", project_id: currentProjectId, slots }),
+    });
+    if (data.error) {
+      status.textContent = \`Error: \${data.error}\`;
+      status.style.color = "#dc3545";
+    } else {
+      status.textContent = \`Added \${data.inserted} slots.\`;
+      status.style.color = "#28a745";
+      document.getElementById("bulk-slots-input").value = "";
+      loadSchedule();
+    }
+  }
+
+  async function addSlot() {
+    const date = document.getElementById("new-slot-date").value;
+    const time = document.getElementById("new-slot-time").value;
+    if (!date || !time) return;
+    await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "add_slot", project_id: currentProjectId, slot_date: date, slot_time: time }),
+    });
+    document.getElementById("new-slot-date").value = "";
+    document.getElementById("new-slot-time").value = "";
+    document.getElementById("slot-add-form").style.display = "none";
+    loadSchedule();
+  }
+
+  async function removeActor(slotId) {
+    if (!confirm("Remove actor from this slot? They will be archived and TBIN will auto-fill.")) return;
+    await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "remove_actor", slot_id: slotId }),
+    });
+    loadSchedule();
+    loadTBIN();
+  }
+
+  // ─── TBIN Queue ────────────────────────────────────────────────────────────
+  async function loadTBIN() {
+    if (!currentProjectId) return;
+    const data = await api(\`admin-tbin?project_id=\${currentProjectId}\`);
+    const el = document.getElementById("tbin-list");
+    if (!data || data.error) { el.innerHTML = \`<p style="color:red">\${data?.error || "Error"}</p>\`; return; }
+    if (data.length === 0) { el.innerHTML = '<p class="loading-text">Queue is empty.</p>'; return; }
+
+    el.innerHTML = data.map(a => \`
+      <div class="tbin-item">
+        <div>
+          <div class="name">\${a.first_name} \${a.last_name}\${a.agent ? \` <span style="font-weight:normal;color:#888;font-size:13px">via \${a.agent}</span>\` : ''}</div>
+          <div class="role">\${a.role} · <span class="email">\${a.email}</span></div>
+        </div>
+        <button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="removeFromTBIN('\${a.id}')">Remove</button>
+      </div>\`).join("");
+  }
+
+  async function addToTBIN() {
+    const first = document.getElementById("tbin-first").value.trim();
+    const last  = document.getElementById("tbin-last").value.trim();
+    const agent = document.getElementById("tbin-agent").value.trim();
+    const email = document.getElementById("tbin-email").value.trim();
+    const role  = document.getElementById("tbin-role").value.trim();
+    if (!first || !last || !email || !role) { alert("Please fill all required fields."); return; }
+
+    await api("admin-tbin", {
+      method: "POST",
+      body: JSON.stringify({ action: "add", project_id: currentProjectId, first_name: first, last_name: last, agent: agent || null, email, role }),
+    });
+    document.getElementById("tbin-first").value = "";
+    document.getElementById("tbin-last").value = "";
+    document.getElementById("tbin-agent").value = "";
+    document.getElementById("tbin-email").value = "";
+    document.getElementById("tbin-role").value = "";
+    loadTBIN();
+  }
+
+  async function removeFromTBIN(id) {
+    await api("admin-tbin", { method: "POST", body: JSON.stringify({ action: "remove", id }) });
+    loadTBIN();
+  }
+
+  function toggleTBINBulk() {
+    const f = document.getElementById("tbin-bulk-form");
+    f.style.display = f.style.display === "none" ? "block" : "none";
+    document.getElementById("tbin-bulk-status").textContent = "";
+  }
+
+  function parseTBINBulk(raw) {
+    const actors = [];
+    for (const line of raw.split("\\n")) {
+      const parts = line.trim().split(/\\t|,/).map(p => p.trim());
+      if (parts.length < 4) continue;
+      // Support both 4-column (no agent) and 5-column (with agent) formats
+      let first_name, last_name, agent, email, role;
+      if (parts.length >= 5 && parts[3].includes("@")) {
+        // 5-col: first, last, agent, email, role
+        [first_name, last_name, agent, email, role] = parts;
+      } else {
+        // 4-col: first, last, email, role
+        [first_name, last_name, email, role] = parts;
+        agent = "";
+      }
+      if (!first_name || !last_name || !email || !role) continue;
+      if (!email.includes("@")) continue;
+      actors.push({ first_name, last_name, agent: agent || null, email, role });
+    }
+    return actors;
+  }
+
+  async function bulkAddTBIN() {
+    const raw = document.getElementById("tbin-bulk-input").value;
+    const actors = parseTBINBulk(raw);
+    const status = document.getElementById("tbin-bulk-status");
+    if (actors.length === 0) { status.textContent = "No valid rows found."; status.style.color = "#dc3545"; return; }
+    status.textContent = \`Adding \${actors.length} actors...\`;
+    const data = await api("admin-tbin", {
+      method: "POST",
+      body: JSON.stringify({ action: "bulk_add", project_id: currentProjectId, actors }),
+    });
+    if (data.error) {
+      status.textContent = \`Error: \${data.error}\`;
+      status.style.color = "#dc3545";
+    } else {
+      status.textContent = \`Added \${data.inserted} actors.\`;
+      status.style.color = "#28a745";
+      document.getElementById("tbin-bulk-input").value = "";
+      loadTBIN();
+    }
+  }
+
+  // ─── Email Queue ───────────────────────────────────────────────────────────
+  async function loadEmailQueue() {
+    const data = await api("admin-email-queue");
+    const el = document.getElementById("email-queue-table");
+    if (!data || data.error) { el.innerHTML = \`<p style="color:red">\${data?.error || "Error"}</p>\`; return; }
+    if (data.length === 0) { el.innerHTML = '<p class="loading-text">Queue is empty.</p>'; return; }
+
+    el.innerHTML = \`<div class="table-scroll"><table>
+      <thead><tr><th>Recipient</th><th>Template</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead>
+      <tbody>\${data.map(r => \`
+        <tr>
+          <td>\${r.recipient_email}</td>
+          <td style="font-size:12px">\${r.template_name}</td>
+          <td><span class="badge badge-\${r.status === 'sent' ? 'confirmed' : r.status === 'dead' ? 'declined' : r.status === 'failed' ? 'rescheduled' : 'invite_sent'}">\${r.status}</span></td>
+          <td>\${r.attempts}</td>
+          <td style="font-size:11px;color:#888;max-width:200px;overflow:hidden;text-overflow:ellipsis">\${r.last_error || ''}</td>
+        </tr>\`).join("")}
+      </tbody>
+    </table></div>\`;
+  }
+
+  async function triggerEmailQueue() {
+    const data = await api("process-email-queue", { method: "POST", body: "{}" });
+    alert(data.error ? \`Error: \${data.error}\` : \`Processed: \${data.sent} sent, \${data.failed} failed.\`);
+    loadEmailQueue();
+  }
+
+  // ─── Gmail Re-auth ─────────────────────────────────────────────────────────
+  async function startGmailReauth() {
+    const data = await api("admin-gmail-auth");
+    if (data.error) { alert("Error: " + data.error); return; }
+    if (!data.url) { alert("Could not generate auth URL."); return; }
+    window.open(data.url, "_blank");
+    alert("Authorize access in the new tab. The page will show you a new refresh token to copy into Supabase secrets.");
+  }
+
+  // ─── Helpers ───────────────────────────────────────────────────────────────
+  function copyLink(url) {
+    navigator.clipboard.writeText(url)
+      .then(() => alert("Link copied to clipboard!"))
+      .catch(() => prompt("Copy this link:", url));
+  }
+
+  function formatDate(d) {
+    if (!d) return "";
+    return new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", {
+      weekday: "short", day: "numeric", month: "short", timeZone: "UTC",
+    });
+  }
+</script>
+</body>
+</html>
+`;
+serve((_req: Request) => new Response(HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
