@@ -50,9 +50,9 @@ Deno.serve(async (req: Request) => {
     return json({ ok: true, message: "Your audition has been confirmed. See you there!" });
   }
 
-  // Look up project CC for emails
+  // Look up project settings
   const { data: proj } = await supabase
-    .from("projects").select("cc_email").eq("id", s.project_id).single();
+    .from("projects").select("cc_email, tpl_invite, tpl_decline, tpl_reschedule").eq("id", s.project_id).single();
   const cc = proj?.cc_email || null;
 
   // ─── DECLINE ────────────────────────────────────────────────────────────────
@@ -74,23 +74,25 @@ Deno.serve(async (req: Request) => {
       reason:     "declined",
     });
 
-    // 2. Queue declined notification
-    await supabase.from("email_queue").insert({
-      slot_id:         null,
-      recipient_email: s.email,
-      template_name:   "declined_notification",
-      template_vars: {
-        "First Name":  s.first_name,
-        "Second Name": s.last_name,
-        "Agent":       s.agent ?? "",
-        "Role":        s.role,
-        "Date":        dateStr,
-        "Time":        s.slot_time.slice(0, 5),
-        "Magic Link":  "",
-      },
-      cc,
-      idempotency_key: `${s.id}:declined_notification:${Date.now()}`,
-    });
+    // 2. Queue declined notification (only if template configured)
+    if (proj?.tpl_decline) {
+      await supabase.from("email_queue").insert({
+        slot_id:         null,
+        recipient_email: s.email,
+        template_name:   proj.tpl_decline,
+        template_vars: {
+          "First Name":  s.first_name,
+          "Second Name": s.last_name,
+          "Agent":       s.agent ?? "",
+          "Role":        s.role,
+          "Date":        dateStr,
+          "Time":        s.slot_time.slice(0, 5),
+          "Magic Link":  "",
+        },
+        cc,
+        idempotency_key: `${s.id}:declined_notification:${Date.now()}`,
+      });
+    }
 
     // 3. Clear the slot
     const newToken = crypto.randomUUID();
@@ -160,22 +162,24 @@ Deno.serve(async (req: Request) => {
       weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
     });
 
-    await supabase.from("email_queue").insert({
-      slot_id:         newSlot.id,
-      recipient_email: s.email,
-      template_name:   "reschedule_confirmation",
-      template_vars: {
-        "First Name":  s.first_name,
-        "Second Name": s.last_name,
-        "Agent":       s.agent ?? "",
-        "Role":        s.role,
-        "Date":        dateStr,
-        "Time":        newSlot.slot_time.slice(0, 5),
-        "Magic Link":  newShortLink,
-      },
-      cc,
-      idempotency_key: `${newSlot.id}:reschedule_confirmation:${Date.now()}`,
-    });
+    if (proj?.tpl_reschedule) {
+      await supabase.from("email_queue").insert({
+        slot_id:         newSlot.id,
+        recipient_email: s.email,
+        template_name:   proj.tpl_reschedule,
+        template_vars: {
+          "First Name":  s.first_name,
+          "Second Name": s.last_name,
+          "Agent":       s.agent ?? "",
+          "Role":        s.role,
+          "Date":        dateStr,
+          "Time":        newSlot.slot_time.slice(0, 5),
+          "Magic Link":  newShortLink,
+        },
+        cc,
+        idempotency_key: `${newSlot.id}:reschedule_confirmation:${Date.now()}`,
+      });
+    }
 
     await fillFromTBIN(supabase, s.id, s.project_id, s.role, s.slot_date, s.slot_time, cc);
     triggerEmailQueue();
@@ -201,7 +205,7 @@ async function fillFromTBIN(
   cc: string | null,
 ) {
   const { data: proj } = await supabase
-    .from("projects").select("tbin_paused").eq("id", projectId).single();
+    .from("projects").select("tbin_paused, tpl_invite").eq("id", projectId).single();
   if (proj?.tbin_paused) return;
 
   const { data: candidates } = await supabase
@@ -236,22 +240,24 @@ async function fillFromTBIN(
     weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
   });
 
-  await supabase.from("email_queue").upsert({
-    slot_id:         slotId,
-    recipient_email: c.email,
-    template_name:   "initial_invite",
-    template_vars: {
-      "First Name":  c.first_name,
-      "Second Name": c.last_name,
-      "Agent":       c.agent ?? "",
-      "Role":        c.role,
-      "Date":        dateStr,
-      "Time":        slotTime.slice(0, 5),
-      "Magic Link":  newShortLink,
-    },
-    cc,
-    idempotency_key: `${slotId}:initial_invite:auto:${c.email}`,
-  }, { onConflict: "idempotency_key", ignoreDuplicates: true });
+  if (proj?.tpl_invite) {
+    await supabase.from("email_queue").upsert({
+      slot_id:         slotId,
+      recipient_email: c.email,
+      template_name:   proj.tpl_invite,
+      template_vars: {
+        "First Name":  c.first_name,
+        "Second Name": c.last_name,
+        "Agent":       c.agent ?? "",
+        "Role":        c.role,
+        "Date":        dateStr,
+        "Time":        slotTime.slice(0, 5),
+        "Magic Link":  newShortLink,
+      },
+      cc,
+      idempotency_key: `${slotId}:initial_invite:auto:${c.email}`,
+    }, { onConflict: "idempotency_key", ignoreDuplicates: true });
+  }
 }
 
 function triggerEmailQueue() {

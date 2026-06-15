@@ -23,10 +23,11 @@ Deno.serve(async (req: Request) => {
 
   const supabase = getSupabaseAdmin();
 
-  // Look up project CC
+  // Look up project settings
   const { data: proj } = await supabase
-    .from("projects").select("cc_email").eq("id", project_id).single();
+    .from("projects").select("cc_email, tpl_invite").eq("id", project_id).single();
   const cc = proj?.cc_email || null;
+  const tplInvite = proj?.tpl_invite || null;
 
   // Fetch all empty slots for this project
   const { data: emptySlots, error: slotsErr } = await supabase
@@ -90,30 +91,32 @@ Deno.serve(async (req: Request) => {
     ),
   );
 
-  // Build and bulk-insert all email_queue rows
-  const emailRows = assignments.map(({ slot, tbin, link }) => ({
-    slot_id:         slot.id,
-    recipient_email: tbin.email,
-    template_name:   "initial_invite",
-    template_vars: {
-      "First Name":  tbin.first_name,
-      "Second Name": tbin.last_name,
-      "Agent":       tbin.agent ?? "",
-      "Role":        tbin.role,
-      "Date":        new Date(slot.slot_date).toLocaleDateString("en-GB", {
-        weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
-      }),
-      "Time":        slot.slot_time.slice(0, 5),
-      "Magic Link":  link,
-    },
-    cc,
-    idempotency_key: `${slot.id}:initial_invite:${tbin.email}`,
-  }));
+  // Build and bulk-insert all email_queue rows (skip if no invite template configured)
+  if (tplInvite) {
+    const emailRows = assignments.map(({ slot, tbin, link }) => ({
+      slot_id:         slot.id,
+      recipient_email: tbin.email,
+      template_name:   tplInvite,
+      template_vars: {
+        "First Name":  tbin.first_name,
+        "Second Name": tbin.last_name,
+        "Agent":       tbin.agent ?? "",
+        "Role":        tbin.role,
+        "Date":        new Date(slot.slot_date).toLocaleDateString("en-GB", {
+          weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
+        }),
+        "Time":        slot.slot_time.slice(0, 5),
+        "Magic Link":  link,
+      },
+      cc,
+      idempotency_key: `${slot.id}:initial_invite:${tbin.email}`,
+    }));
 
-  await supabase.from("email_queue").upsert(emailRows, {
-    onConflict:       "idempotency_key",
-    ignoreDuplicates: true,
-  });
+    await supabase.from("email_queue").upsert(emailRows, {
+      onConflict:       "idempotency_key",
+      ignoreDuplicates: true,
+    });
+  }
 
   // Trigger email queue processing (non-blocking)
   const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/process-email-queue`;
@@ -124,9 +127,13 @@ Deno.serve(async (req: Request) => {
     body: "{}",
   }).catch(() => {});
 
+  const warnings: string[] = [];
+  if (!tplInvite) warnings.push("No invite template configured for this project. Emails were not queued.");
+
   return json({
     filled:              assignments.length,
     no_actors_available: noActors,
     message:             `Filled ${assignments.length} slot(s).${noActors > 0 ? ` ${noActors} slot(s) had no actors in TBIN.` : ""}`,
+    ...(warnings.length > 0 && { warnings }),
   });
 });

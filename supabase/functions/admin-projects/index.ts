@@ -7,6 +7,7 @@
 //   { action: "delete",           id }
 //   { action: "set_tbin_paused",  id, paused: bool }
 //   { action: "set_chase_paused", id, paused: bool }
+//   { action: "set_templates",    id, tpl_invite, tpl_decline, tpl_reschedule, tpl_chase }
 
 import { getSupabaseAdmin, json, cors, requireAdminAuth } from "../_shared/supabase.ts";
 
@@ -31,7 +32,7 @@ Deno.serve(async (req: Request) => {
 
     const { data, error } = await supabase
       .from("projects")
-      .select("id, name, tbin_paused, chase_paused, cc_email, created_at")
+      .select("id, name, tbin_paused, chase_paused, cc_email, tpl_invite, tpl_decline, tpl_reschedule, tpl_chase, created_at")
       .is("archived_at", null)
       .order("created_at", { ascending: true });
     if (error) return json({ error: error.message }, 500);
@@ -82,6 +83,20 @@ Deno.serve(async (req: Request) => {
       const { error } = await supabase
         .from("projects")
         .update({ chase_paused: body.paused })
+        .eq("id", body.id);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true });
+    }
+
+    if (body.action === "set_templates") {
+      const { error } = await supabase
+        .from("projects")
+        .update({
+          tpl_invite:     body.tpl_invite     || null,
+          tpl_decline:    body.tpl_decline    || null,
+          tpl_reschedule: body.tpl_reschedule || null,
+          tpl_chase:      body.tpl_chase      || null,
+        })
         .eq("id", body.id);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true });

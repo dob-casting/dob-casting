@@ -83,7 +83,8 @@ async function getDraftTemplate(
   accessToken: string,
   templateName: string,
 ): Promise<{ subject: string; htmlBody: string } | null> {
-  const label = DRAFT_LABEL_MAP[templateName];
+  // Use DRAFT_LABEL_MAP for legacy names, otherwise treat templateName as a direct Gmail label
+  const label = DRAFT_LABEL_MAP[templateName] || templateName;
   if (!label) return null;
 
   try {
