@@ -80,9 +80,10 @@ async function getDraftTemplate(
   if (!templateName) return null;
 
   try {
-    // Search for a draft matching the configured subject line
+    // Strip {{placeholders}} from the search query so Gmail can match the static words
+    const searchTerms = templateName.replace(/\{\{[^}]+\}\}/g, "").replace(/\s+/g, " ").trim();
     const listRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`subject:(${templateName})`)}&maxResults=1`,
+      `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`subject:(${searchTerms})`)}&maxResults=1`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     if (!listRes.ok) return null;
@@ -211,15 +212,6 @@ Deno.serve(async (req: Request) => {
     }),
   );
 
-  // Fall back to DB for any templates not found in Gmail drafts
-  const missingNames = templateNames.filter((n) => !templateMap[n]);
-  if (missingNames.length > 0) {
-    const { data: dbTemplates } = await supabase
-      .from("email_templates")
-      .select("name, subject, html_body")
-      .in("name", missingNames);
-    (dbTemplates ?? []).forEach((t) => { templateMap[t.name] = t; });
-  }
 
   // Send all emails in parallel
   const results = await Promise.allSettled(
@@ -228,7 +220,8 @@ Deno.serve(async (req: Request) => {
       if (!tmpl) throw new Error(`Template not found: ${row.template_name}`);
 
       const vars = row.template_vars as Record<string, string>;
-      const subject  = renderTemplate(tmpl.subject, vars);
+      // Use the configured subject line (from template_name) with placeholders rendered
+      const subject  = renderTemplate(row.template_name as string, vars);
       const htmlBody = renderTemplate(tmpl.html_body, vars);
 
       await sendGmailEmail(accessToken, row.recipient_email as string, subject, htmlBody, fromName, fromEmail, row.cc as string | null);
