@@ -138,14 +138,13 @@ Deno.serve(async (req: Request) => {
 
   const slotIds = slots.map((s) => s.id as string);
 
-  // 4. Find when the initial invite was sent for each slot.
+  // 4. Find when the first email was sent for each slot (i.e. the invite).
   const { data: inviteRows } = await supabase
     .from("email_queue")
     .select("slot_id, sent_at")
     .in("slot_id", slotIds)
-    .eq("template_name", "initial_invite")
     .eq("status", "sent")
-    .order("sent_at", { ascending: false });
+    .order("sent_at", { ascending: true });
 
   // Keep only the most recent invite per slot.
   const inviteSentAt: Record<string, string> = {};
@@ -213,7 +212,7 @@ Deno.serve(async (req: Request) => {
     return {
       slot_id:          slot.id,
       recipient_email:  slot.email,
-      template_name:    project?.tpl_chase ?? "chase",
+      template_name:    project!.tpl_chase!,
       template_vars:    {
         "First Name":  slot.first_name ?? "",
         "Second Name": slot.last_name ?? "",

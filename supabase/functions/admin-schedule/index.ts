@@ -75,7 +75,7 @@ Deno.serve(async (req: Request) => {
       if (!slot || !slot.first_name) return json({ error: "Slot not found or already empty" }, 404);
 
       const { data: proj } = await supabase
-        .from("projects").select("tbin_paused, cc_email").eq("id", slot.project_id).single();
+        .from("projects").select("tbin_paused, cc_email, tpl_invite, tpl_decline").eq("id", slot.project_id).single();
       const cc = proj?.cc_email || null;
 
       const dateStr = new Date(slot.slot_date).toLocaleDateString("en-GB", {
@@ -95,23 +95,25 @@ Deno.serve(async (req: Request) => {
         reason:     "removed",
       });
 
-      // Queue declined notification
-      await supabase.from("email_queue").insert({
-        slot_id:         null,
-        recipient_email: slot.email,
-        template_name:   "declined_notification",
-        template_vars: {
-          "First Name":  slot.first_name,
-          "Second Name": slot.last_name,
-          "Agent":       slot.agent ?? "",
-          "Role":        slot.role,
-          "Date":        dateStr,
-          "Time":        slot.slot_time.slice(0, 5),
-          "Magic Link":  "",
-        },
-        cc,
-        idempotency_key: `${slot.id}:declined_notification:admin_remove:${Date.now()}`,
-      });
+      // Queue declined notification (only if template configured)
+      if (proj?.tpl_decline) {
+        await supabase.from("email_queue").insert({
+          slot_id:         null,
+          recipient_email: slot.email,
+          template_name:   proj.tpl_decline,
+          template_vars: {
+            "First Name":  slot.first_name,
+            "Second Name": slot.last_name,
+            "Agent":       slot.agent ?? "",
+            "Role":        slot.role,
+            "Date":        dateStr,
+            "Time":        slot.slot_time.slice(0, 5),
+            "Magic Link":  "",
+          },
+          cc,
+          idempotency_key: `${slot.id}:declined_notification:admin_remove:${Date.now()}`,
+        });
+      }
 
       // Clear the slot
       const newToken = crypto.randomUUID();
@@ -155,22 +157,24 @@ Deno.serve(async (req: Request) => {
           short_link:  autoLink,
         }).eq("id", slot.id);
 
-        await supabase.from("email_queue").upsert({
-          slot_id:         slot.id,
-          recipient_email: c.email,
-          template_name:   "initial_invite",
-          template_vars: {
-            "First Name":  c.first_name,
-            "Second Name": c.last_name,
-            "Agent":       c.agent ?? "",
-            "Role":        c.role,
-            "Date":        dateStr,
-            "Time":        slot.slot_time.slice(0, 5),
-            "Magic Link":  autoLink,
-          },
-          cc,
-          idempotency_key: `${slot.id}:initial_invite:admin_remove:${c.email}`,
-        }, { onConflict: "idempotency_key", ignoreDuplicates: true });
+        if (proj?.tpl_invite) {
+          await supabase.from("email_queue").upsert({
+            slot_id:         slot.id,
+            recipient_email: c.email,
+            template_name:   proj.tpl_invite,
+            template_vars: {
+              "First Name":  c.first_name,
+              "Second Name": c.last_name,
+              "Agent":       c.agent ?? "",
+              "Role":        c.role,
+              "Date":        dateStr,
+              "Time":        slot.slot_time.slice(0, 5),
+              "Magic Link":  autoLink,
+            },
+            cc,
+            idempotency_key: `${slot.id}:initial_invite:admin_remove:${c.email}`,
+          }, { onConflict: "idempotency_key", ignoreDuplicates: true });
+        }
 
       }
       }

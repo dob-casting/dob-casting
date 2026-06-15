@@ -90,7 +90,7 @@ Deno.serve(async (req: Request) => {
       if (slot.status !== "empty") return json({ error: "Slot is not empty" }, 409);
 
       const { data: proj } = await supabase
-        .from("projects").select("cc_email").eq("id", entry.project_id).single();
+        .from("projects").select("cc_email, tpl_invite").eq("id", entry.project_id).single();
       const cc = proj?.cc_email || null;
 
       const token = crypto.randomUUID();
@@ -114,22 +114,24 @@ Deno.serve(async (req: Request) => {
         weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
       });
 
-      await supabase.from("email_queue").upsert({
-        slot_id:         slot.id,
-        recipient_email: entry.email,
-        template_name:   "initial_invite",
-        template_vars: {
-          "First Name":  entry.first_name,
-          "Second Name": entry.last_name,
-          "Agent":       entry.agent ?? "",
-          "Role":        entry.role,
-          "Date":        dateStr,
-          "Time":        slot.slot_time.slice(0, 5),
-          "Magic Link":  link,
-        },
-        cc,
-        idempotency_key: `${slot.id}:initial_invite:manual_book:${entry.email}`,
-      }, { onConflict: "idempotency_key", ignoreDuplicates: true });
+      if (proj?.tpl_invite) {
+        await supabase.from("email_queue").upsert({
+          slot_id:         slot.id,
+          recipient_email: entry.email,
+          template_name:   proj.tpl_invite,
+          template_vars: {
+            "First Name":  entry.first_name,
+            "Second Name": entry.last_name,
+            "Agent":       entry.agent ?? "",
+            "Role":        entry.role,
+            "Date":        dateStr,
+            "Time":        slot.slot_time.slice(0, 5),
+            "Magic Link":  link,
+          },
+          cc,
+          idempotency_key: `${slot.id}:initial_invite:manual_book:${entry.email}`,
+        }, { onConflict: "idempotency_key", ignoreDuplicates: true });
+      }
 
       const fnUrl  = `${Deno.env.get("SUPABASE_URL")}/functions/v1/process-email-queue`;
       const svcKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
