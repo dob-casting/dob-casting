@@ -1,20 +1,13 @@
-// process-email-queue — self-healing email engine
+// process-email-queue — email sending engine
 // POST /functions/v1/process-email-queue
 //
-// Templates are read from Gmail drafts labelled:
-//   dob-invite       → initial_invite
-//   dob-declined     → declined_notification
-//   dob-reschedule   → reschedule_confirmation
-//
-// Falls back to the email_templates DB table if no labelled draft is found.
-//
+// Templates (subject + html_body) are loaded from the email_templates DB table.
 // Called after fill-initial-schedule, after actor-action, and every minute by pg_cron.
 
 import { getSupabaseAdmin, json, cors } from "../_shared/supabase.ts";
 
 const MAX_ATTEMPTS = 5;
 const BATCH_SIZE   = 20;
-
 
 // ─── Gmail OAuth2 ─────────────────────────────────────────────────────────────
 
@@ -34,126 +27,6 @@ async function getGmailAccessToken(): Promise<string> {
   return data.access_token as string;
 }
 
-// ─── Gmail draft template fetching ───────────────────────────────────────────
-
-function base64UrlDecode(str: string): string {
-  const base64 = str.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = base64 + "==".slice(0, (4 - (base64.length % 4)) % 4);
-  return atob(padded);
-}
-
-function extractHtmlFromPayload(payload: Record<string, unknown>): string {
-  const mimeType = payload.mimeType as string | undefined;
-  const body = payload.body as Record<string, unknown> | undefined;
-  const parts = payload.parts as Record<string, unknown>[] | undefined;
-
-  if (mimeType === "text/html" && body?.data) {
-    return base64UrlDecode(body.data as string);
-  }
-  if (parts) {
-    // Look for text/html in parts
-    for (const part of parts) {
-      if (part.mimeType === "text/html" && (part.body as Record<string, unknown>)?.data) {
-        return base64UrlDecode(((part.body as Record<string, unknown>).data) as string);
-      }
-      if ((part.mimeType as string)?.startsWith("multipart/")) {
-        const nested = extractHtmlFromPayload(part);
-        if (nested) return nested;
-      }
-    }
-    // Fall back to plain text wrapped in <pre>
-    for (const part of parts) {
-      if (part.mimeType === "text/plain" && (part.body as Record<string, unknown>)?.data) {
-        const text = base64UrlDecode(((part.body as Record<string, unknown>).data) as string);
-        return `<pre style="white-space:pre-wrap;font-family:sans-serif">${text}</pre>`;
-      }
-    }
-  }
-  if (body?.data) return base64UrlDecode(body.data as string);
-  return "";
-}
-
-// Fetches all Gmail drafts and returns a map of subject -> { id, subject }.
-// Results are cached for the lifetime of the invocation.
-let _draftCache: { id: string; subject: string }[] | null = null;
-
-async function listAllDrafts(accessToken: string): Promise<{ id: string; subject: string }[]> {
-  if (_draftCache) return _draftCache;
-
-  const allDrafts: { id: string; messageId: string }[] = [];
-  let pageToken: string | undefined;
-
-  // Paginate through all drafts
-  do {
-    const url = `https://gmail.googleapis.com/gmail/v1/users/me/drafts?maxResults=100${pageToken ? `&pageToken=${pageToken}` : ""}`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (!res.ok) break;
-    const data = await res.json();
-    for (const d of (data.drafts ?? []) as { id: string; message: { id: string } }[]) {
-      allDrafts.push({ id: d.id, messageId: d.message.id });
-    }
-    pageToken = data.nextPageToken;
-  } while (pageToken);
-
-  // Fetch subject header for each draft in parallel
-  const results = await Promise.all(
-    allDrafts.map(async (d) => {
-      const res = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${d.id}?format=metadata&metadataHeaders=Subject`,
-        { headers: { Authorization: `Bearer ${accessToken}` } },
-      );
-      if (!res.ok) return null;
-      const data = await res.json();
-      const headers = (data.message?.payload?.headers ?? []) as { name: string; value: string }[];
-      const subject = headers.find((h) => h.name.toLowerCase() === "subject")?.value ?? "";
-      return { id: d.id, subject };
-    }),
-  );
-
-  _draftCache = results.filter((r): r is { id: string; subject: string } => r !== null);
-  return _draftCache;
-}
-
-// Normalise dashes, whitespace and case for fuzzy subject matching.
-// Gmail often converts hyphens to en/em dashes in draft subjects.
-function normalise(s: string): string {
-  return s
-    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\uFE58\uFE63\uFF0D\u002D]/g, "-")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-async function getDraftTemplate(
-  accessToken: string,
-  templateName: string,
-): Promise<{ subject: string; htmlBody: string } | null> {
-  if (!templateName) return null;
-
-  try {
-    const drafts = await listAllDrafts(accessToken);
-    const target = normalise(templateName);
-    const match = drafts.find((d) => normalise(d.subject) === target);
-    if (!match) return null;
-
-    // Fetch full content of the matched draft
-    const draftRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${match.id}?format=full`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-    );
-    if (!draftRes.ok) return null;
-
-    const draftData = await draftRes.json();
-    const payload = draftData.message?.payload as Record<string, unknown> | undefined;
-    if (!payload) return null;
-
-    const htmlBody = extractHtmlFromPayload(payload);
-    return { subject: match.subject, htmlBody };
-  } catch {
-    return null;
-  }
-}
-
 // ─── Send one email via Gmail API ─────────────────────────────────────────────
 
 async function sendGmailEmail(
@@ -164,7 +37,7 @@ async function sendGmailEmail(
   fromName: string,
   fromEmail: string,
   cc?: string | null,
-): Promise<void> {
+): Promise<string> {
   const headers = [
     `From: ${fromName} <${fromEmail}>`,
     `To: ${to}`,
@@ -192,6 +65,8 @@ async function sendGmailEmail(
   });
 
   if (!res.ok) throw new Error(`Gmail send failed (${res.status}): ${await res.text()}`);
+  const result = await res.json();
+  return result.id ?? "unknown";
 }
 
 // ─── Template rendering ───────────────────────────────────────────────────────
@@ -208,7 +83,7 @@ Deno.serve(async (req: Request) => {
   const fromName  = Deno.env.get("EMAIL_DISPLAY_NAME") ?? "Debbie O'Brien Casting";
   const fromEmail = Deno.env.get("GMAIL_FROM_EMAIL")!;
 
-  // Claim a batch of pending or failed rows
+  // 1. Claim a batch of pending or failed rows
   const { data: rows, error: fetchErr } = await supabase
     .from("email_queue")
     .select("id, slot_id, recipient_email, template_name, template_vars, attempts, cc")
@@ -217,21 +92,28 @@ Deno.serve(async (req: Request) => {
     .order("created_at", { ascending: true })
     .limit(BATCH_SIZE);
 
-  if (fetchErr) return json({ error: fetchErr.message }, 500);
+  if (fetchErr) {
+    console.error("Failed to fetch queue:", fetchErr.message);
+    return json({ error: fetchErr.message }, 500);
+  }
   if (!rows || rows.length === 0) return json({ processed: 0, sent: 0, failed: 0 });
 
-  // Mark all claimed rows as 'sending'
+  console.log(`Claimed ${rows.length} email(s) for processing`);
+
+  // 2. Mark all claimed rows as 'sending'
   const ids = rows.map((r) => r.id);
   await supabase
     .from("email_queue")
     .update({ status: "sending", last_attempt_at: new Date().toISOString() })
     .in("id", ids);
 
-  // Get Gmail access token
+  // 3. Get Gmail access token
   let accessToken: string;
   try {
     accessToken = await getGmailAccessToken();
+    console.log("Gmail access token refreshed");
   } catch (err) {
+    console.error("Gmail token refresh failed:", String(err));
     await Promise.all(rows.map((row) =>
       supabase.from("email_queue")
         .update({ status: "failed", last_error: String(err), attempts: row.attempts + 1 })
@@ -240,36 +122,56 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Gmail token refresh failed", detail: String(err) }, 500);
   }
 
-  // Fetch templates — try Gmail drafts first, fall back to DB
+  // 4. Load templates from DB
   const templateNames = [...new Set(rows.map((r) => r.template_name as string))];
+  const { data: dbTemplates, error: tmplErr } = await supabase
+    .from("email_templates")
+    .select("name, subject, html_body")
+    .in("name", templateNames);
+
+  if (tmplErr) {
+    console.error("Failed to load templates:", tmplErr.message);
+    await Promise.all(rows.map((row) =>
+      supabase.from("email_queue")
+        .update({ status: "failed", last_error: `Template load failed: ${tmplErr.message}`, attempts: row.attempts + 1 })
+        .eq("id", row.id)
+    ));
+    return json({ error: "Template load failed", detail: tmplErr.message }, 500);
+  }
+
   const templateMap: Record<string, { subject: string; html_body: string }> = {};
+  for (const t of dbTemplates ?? []) {
+    if (!t.subject || !t.html_body) {
+      console.warn(`Template "${t.name}": missing subject or html_body, skipping`);
+      continue;
+    }
+    console.log(`Template "${t.name}": loaded (subject: "${t.subject}")`);
+    templateMap[t.name] = { subject: t.subject, html_body: t.html_body };
+  }
 
-  // Try Gmail drafts in parallel
-  await Promise.all(
-    templateNames.map(async (name) => {
-      const draft = await getDraftTemplate(accessToken, name);
-      if (draft) templateMap[name] = { subject: draft.subject, html_body: draft.htmlBody };
-    }),
-  );
+  const missing = templateNames.filter((n) => !templateMap[n]);
+  if (missing.length > 0) {
+    console.error(`Missing templates: ${missing.join(", ")}`);
+  }
 
-
-  // Send all emails in parallel
+  // 5. Send all emails in parallel
   const results = await Promise.allSettled(
     rows.map(async (row) => {
       const tmpl = templateMap[row.template_name as string];
-      if (!tmpl) throw new Error(`Template not found: ${row.template_name}`);
+      if (!tmpl) throw new Error(`Template not found: ${row.template_name}. Create it in the admin portal.`);
 
       const vars = row.template_vars as Record<string, string>;
-      // Use the configured subject line (from template_name) with placeholders rendered
-      const subject  = renderTemplate(row.template_name as string, vars);
+      const subject  = renderTemplate(tmpl.subject, vars);
       const htmlBody = renderTemplate(tmpl.html_body, vars);
 
-      await sendGmailEmail(accessToken, row.recipient_email as string, subject, htmlBody, fromName, fromEmail, row.cc as string | null);
+      console.log(`Sending: to=${row.recipient_email} template=${row.template_name} subject="${subject}"`);
+      const msgId = await sendGmailEmail(accessToken, row.recipient_email as string, subject, htmlBody, fromName, fromEmail, row.cc as string | null);
+      console.log(`Sent: to=${row.recipient_email} msgId=${msgId}`);
       return row.id;
     }),
   );
 
-  // Update each row
+  // 6. Update each row
   await Promise.all(results.map(async (result, i) => {
     const row = rows[i];
     const newAttempts = (row.attempts as number) + 1;
@@ -280,6 +182,8 @@ Deno.serve(async (req: Request) => {
         .eq("id", row.id);
     } else {
       const isDead = newAttempts >= MAX_ATTEMPTS;
+      console.error(`Failed row ${row.id} (attempt ${newAttempts}): ${result.reason}`);
+      if (isDead) console.error(`Row ${row.id} marked as dead after ${newAttempts} attempts`);
       await supabase.from("email_queue")
         .update({
           status: isDead ? "dead" : "failed",
@@ -292,5 +196,6 @@ Deno.serve(async (req: Request) => {
 
   const sent   = results.filter((r) => r.status === "fulfilled").length;
   const failed = results.filter((r) => r.status === "rejected").length;
+  console.log(`Batch complete: ${sent} sent, ${failed} failed out of ${rows.length}`);
   return json({ processed: rows.length, sent, failed });
 });

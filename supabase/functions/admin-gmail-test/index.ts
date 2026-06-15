@@ -1,14 +1,8 @@
-// admin-gmail-test — diagnose Gmail OAuth scopes and draft availability
-// GET /functions/v1/admin-gmail-test
-// Returns: token scopes, list of first 10 drafts, and whether each template label was found.
+// admin-gmail-test — verify Gmail OAuth and send a test email
+// GET  /functions/v1/admin-gmail-test                    → check token + scopes
+// POST /functions/v1/admin-gmail-test  { recipient }     → send a test email
 
 import { json, cors, requireAdminAuth } from "../_shared/supabase.ts";
-
-const DRAFT_LABELS: Record<string, string> = {
-  initial_invite:          "dob-invite",
-  declined_notification:   "dob-declined",
-  reschedule_confirmation: "dob-reschedule",
-};
 
 async function getAccessToken(): Promise<string> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -22,97 +16,66 @@ async function getAccessToken(): Promise<string> {
     }),
   });
   if (!res.ok) throw new Error(`Token refresh failed: ${await res.text()}`);
-  const data = await res.json();
-  return data.access_token as string;
+  return (await res.json()).access_token;
 }
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return cors();
   if (!requireAdminAuth(req)) return json({ error: "Unauthorized" }, 401);
 
-  // Get access token
   let accessToken: string;
   try {
     accessToken = await getAccessToken();
   } catch (err) {
-    return json({ error: "Token refresh failed", detail: String(err) });
+    return json({ ok: false, error: String(err) }, 500);
   }
 
-  // Check what scopes the token has
-  const tokenInfoRes = await fetch(
-    `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${accessToken}`,
-  );
-  const tokenInfo = await tokenInfoRes.json();
-
-  // List first 10 drafts to see what's available
-  const draftsRes = await fetch(
-    "https://gmail.googleapis.com/gmail/v1/users/me/drafts?maxResults=10",
-    { headers: { Authorization: `Bearer ${accessToken}` } },
-  );
-  const draftsStatus = draftsRes.status;
-  const draftsData = draftsRes.ok ? await draftsRes.json() : { error: await draftsRes.text() };
-
-  // For each draft, get its subject line
-  const draftDetails: { id: string; subject: string; snippet: string }[] = [];
-  if (draftsData.drafts) {
-    await Promise.all(
-      (draftsData.drafts as { id: string }[]).map(async (d) => {
-        const r = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${d.id}?format=metadata&metadataHeaders=Subject`,
-          { headers: { Authorization: `Bearer ${accessToken}` } },
-        );
-        if (!r.ok) return;
-        const data = await r.json();
-        const headers: { name: string; value: string }[] = data.message?.payload?.headers ?? [];
-        const subject = headers.find(h => h.name === "Subject")?.value ?? "(no subject)";
-        draftDetails.push({ id: d.id, subject, snippet: data.message?.snippet ?? "" });
-      }),
+  // GET — verify token works
+  if (req.method === "GET") {
+    const infoRes = await fetch(
+      `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${accessToken}`,
     );
+    const info = await infoRes.json();
+    return json({ ok: true, scopes: info.scope ?? "unknown" });
   }
 
-  // Check each template label
-  const templateResults: Record<string, { label: string; found: boolean; subject?: string }> = {};
-  await Promise.all(
-    Object.entries(DRAFT_LABELS).map(async ([templateName, label]) => {
-      const r = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`label:${label}`)}&maxResults=1`,
-        { headers: { Authorization: `Bearer ${accessToken}` } },
-      );
-      if (!r.ok) {
-        templateResults[templateName] = { label, found: false };
-        return;
-      }
-      const data = await r.json();
-      const drafts = (data.drafts as { id: string }[]) ?? [];
-      if (drafts.length === 0) {
-        templateResults[templateName] = { label, found: false };
-        return;
-      }
-      // Get subject of found draft
-      const dr = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${drafts[0].id}?format=metadata&metadataHeaders=Subject`,
-        { headers: { Authorization: `Bearer ${accessToken}` } },
-      );
-      if (dr.ok) {
-        const dd = await dr.json();
-        const headers: { name: string; value: string }[] = dd.message?.payload?.headers ?? [];
-        const subject = headers.find(h => h.name === "Subject")?.value ?? "(no subject)";
-        templateResults[templateName] = { label, found: true, subject };
-      } else {
-        templateResults[templateName] = { label, found: true };
-      }
-    }),
-  );
+  // POST — send a test email
+  if (req.method === "POST") {
+    const { recipient } = await req.json();
+    if (!recipient) return json({ error: "Missing recipient" }, 400);
 
-  return json({
-    token_scopes: tokenInfo.scope ?? tokenInfo.error ?? "unknown",
-    drafts_api_status: draftsStatus,
-    all_drafts: draftDetails,
-    templates: templateResults,
-    instructions: {
-      "1_create_labels": "In Gmail: Settings → Labels → Create: dob-invite, dob-declined, dob-reschedule",
-      "2_label_drafts": "Open each draft → apply the matching label",
-      "3_scopes_needed": "gmail.readonly or gmail.modify (if scope missing, re-authorize OAuth)",
-    },
-  });
+    const fromName  = Deno.env.get("EMAIL_DISPLAY_NAME") ?? "Debbie O'Brien Casting";
+    const fromEmail = Deno.env.get("GMAIL_FROM_EMAIL")!;
+
+    const message = [
+      `From: ${fromName} <${fromEmail}>`,
+      `To: ${recipient}`,
+      `Subject: Test Email - Audition System`,
+      `MIME-Version: 1.0`,
+      `Content-Type: text/html; charset=UTF-8`,
+      ``,
+      `<p>This is a test email from the audition system.</p><p>If you can read this, Gmail sending is working correctly.</p>`,
+    ].join("\r\n");
+
+    const encoded = btoa(unescape(encodeURIComponent(message)))
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+    const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ raw: encoded }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`Gmail test send failed: ${errText}`);
+      return json({ ok: false, error: `Send failed (${res.status}): ${errText}` }, 500);
+    }
+
+    const result = await res.json();
+    console.log(`Test email sent to ${recipient}, messageId=${result.id}`);
+    return json({ ok: true, messageId: result.id });
+  }
+
+  return json({ error: "Method not allowed" }, 405);
 });

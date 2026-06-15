@@ -97,7 +97,11 @@ const HTML = `<!DOCTYPE html>
       /* Hide less critical columns on mobile */
       .col-email, .col-agent { display: none; }
     }
+    /* Quill editor overrides */
+    #tmpl-editor-container { background: white; }
+    #tmpl-editor-container .ql-editor { min-height: 200px; font-family: Arial, sans-serif; font-size: 14px; }
   </style>
+  <link href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" rel="stylesheet">
 </head>
 <body>
 
@@ -206,24 +210,40 @@ const HTML = `<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Email Templates (Gmail Drafts) -->
-  <div class="card">
+  <!-- Email Templates -->
+  <div class="card" id="templates-card">
     <h2>Email Templates</h2>
-    <p style="color:#666;margin-top:0">Templates are Gmail drafts. In Gmail, create a draft for each template and apply the matching label:</p>
-    <table style="font-size:13px;border-collapse:collapse;margin-bottom:12px">
-      <tr>
-        <th style="text-align:left;padding:6px 16px 6px 0;color:#555;font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Template</th>
-        <th style="text-align:left;padding:6px 0;color:#555;font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Gmail Label to apply</th>
-      </tr>
-      <tr><td style="padding:4px 16px 4px 0">Initial invite</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-invite</code></td></tr>
-      <tr><td style="padding:4px 16px 4px 0">Declined notification</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-declined</code></td></tr>
-      <tr><td style="padding:4px 16px 4px 0">Reschedule confirmation</td><td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">dob-reschedule</code></td></tr>
-    </table>
-    <p style="color:#666;font-size:13px;margin:0 0 16px">Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Agent}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code></p>
-    <details style="margin-top:4px">
-      <summary style="cursor:pointer;font-size:13px;color:#666;user-select:none">Gmail not sending drafts? Re-authorise here</summary>
+    <p style="color:#666;margin-top:0">Edit the subject and body for each email type. Use <code>{{placeholders}}</code> in both.</p>
+
+    <div class="template-tabs" id="template-tabs">
+      <button class="tab-btn active" onclick="showTemplate('initial_invite')">Invite</button>
+      <button class="tab-btn" onclick="showTemplate('declined_notification')">Decline</button>
+      <button class="tab-btn" onclick="showTemplate('reschedule_confirmation')">Reschedule</button>
+      <button class="tab-btn" onclick="showTemplate('chase')">Chase</button>
+    </div>
+
+    <div style="margin-bottom:10px">
+      <label style="font-size:13px;font-weight:bold;display:block;margin-bottom:4px">Subject:</label>
+      <input type="text" id="tmpl-subject" style="width:100%">
+    </div>
+    <div>
+      <label style="font-size:13px;font-weight:bold;display:block;margin-bottom:4px">Body:</label>
+      <div id="tmpl-editor-container"></div>
+    </div>
+    <p style="color:#666;font-size:12px;margin:8px 0 0">
+      Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Agent}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code>
+    </p>
+
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+      <button class="btn-primary" onclick="saveTemplate()">Save</button>
+      <button class="btn-secondary" onclick="showTemplate(activeTemplate)">Cancel</button>
+      <span class="status-msg" id="tmpl-status"></span>
+    </div>
+
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;font-size:13px;color:#666;user-select:none">Gmail not sending? Re-authorise here</summary>
       <div style="margin-top:12px;padding:12px;background:#fff3cd;border-radius:6px;font-size:13px;color:#856404">
-        <p style="margin:0 0 10px">If Gmail drafts aren't being read, the OAuth token may need to be updated with the <code>gmail.modify</code> scope.</p>
+        <p style="margin:0 0 10px">If emails aren't sending, the OAuth token may need updating.</p>
         <button class="btn-primary" style="font-size:13px;padding:8px 16px" onclick="startGmailReauth()">Re-authorise Gmail Access</button>
         <p style="margin:10px 0 0;color:#666">After authorising, copy the refresh token shown and update the <strong>GMAIL_REFRESH_TOKEN</strong> secret in your Supabase project settings.</p>
       </div>
@@ -281,6 +301,8 @@ const HTML = `<!DOCTYPE html>
     document.getElementById("app").style.display = "block";
     populateProjectDropdown(data);
     document.getElementById("email-queue-card").style.display = "block";
+    initQuill();
+    loadTemplates();
     loadEmailQueue();
     return true;
   }
@@ -686,6 +708,74 @@ const HTML = `<!DOCTYPE html>
     }
   }
 
+  // ─── Email Templates ───────────────────────────────────────────────────────
+  const TEMPLATE_NAMES = ["initial_invite", "declined_notification", "reschedule_confirmation", "chase"];
+  let templateCache = {};
+  let activeTemplate = "initial_invite";
+  let quillEditor = null;
+
+  function initQuill() {
+    if (quillEditor) return;
+    quillEditor = new Quill("#tmpl-editor-container", {
+      theme: "snow",
+      modules: {
+        toolbar: [
+          ["bold", "italic", "underline"],
+          [{ "header": [1, 2, 3, false] }],
+          ["link"],
+          [{ "list": "ordered" }, { "list": "bullet" }],
+          ["clean"],
+        ],
+      },
+      placeholder: "Write your email body here...",
+    });
+  }
+
+  async function loadTemplates() {
+    const data = await api("admin-templates");
+    templateCache = {};
+    (Array.isArray(data) ? data : []).forEach(t => { templateCache[t.name] = t; });
+    showTemplate(activeTemplate);
+    document.getElementById("tmpl-status").textContent = "";
+  }
+
+  function showTemplate(name) {
+    activeTemplate = name;
+    document.querySelectorAll("#template-tabs .tab-btn").forEach((btn, i) => {
+      btn.classList.toggle("active", TEMPLATE_NAMES[i] === name);
+    });
+    const t = templateCache[name] || {};
+    document.getElementById("tmpl-subject").value = t.subject || "";
+    if (quillEditor) {
+      quillEditor.root.innerHTML = t.html_body || "";
+    }
+    document.getElementById("tmpl-status").textContent = "";
+  }
+
+  async function saveTemplate() {
+    const subject = document.getElementById("tmpl-subject").value.trim();
+    const html_body = quillEditor ? quillEditor.root.innerHTML.trim() : "";
+    if (!subject || !html_body || html_body === "<p><br></p>") {
+      alert("Both subject and body are required.");
+      return;
+    }
+
+    const data = await api("admin-templates", {
+      method: "POST",
+      body: JSON.stringify({ name: activeTemplate, subject, html_body }),
+    });
+    const status = document.getElementById("tmpl-status");
+    if (data.ok) {
+      templateCache[activeTemplate] = { subject, html_body };
+      status.textContent = "Saved.";
+      status.style.color = "#28a745";
+    } else {
+      status.textContent = data.error || "Failed to save.";
+      status.style.color = "#dc3545";
+    }
+    setTimeout(() => { status.textContent = ""; }, 3000);
+  }
+
   // ─── Email Queue ───────────────────────────────────────────────────────────
   async function loadEmailQueue() {
     const data = await api("admin-email-queue");
@@ -736,6 +826,7 @@ const HTML = `<!DOCTYPE html>
     });
   }
 </script>
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
 </body>
 </html>
 `;

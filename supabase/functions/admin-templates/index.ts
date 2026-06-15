@@ -18,8 +18,11 @@ Deno.serve(async (req: Request) => {
   }
 
   if (req.method === "POST") {
-    const { name, subject, html_body } = await req.json();
-    if (!name || !subject || !html_body) return json({ error: "Missing fields" }, 400);
+    const body = await req.json();
+    const { name, subject, html_body } = body;
+    if (!name || !subject || !html_body) {
+      return json({ error: "name, subject, and html_body are all required" }, 400);
+    }
 
     const { error } = await supabase
       .from("email_templates")
