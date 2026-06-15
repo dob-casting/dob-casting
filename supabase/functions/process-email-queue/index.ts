@@ -80,9 +80,9 @@ async function getDraftTemplate(
   if (!templateName) return null;
 
   try {
-    // Search for a draft whose subject starts with the configured prefix
+    // Search for a draft matching the configured subject line
     const listRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`subject:${templateName}`)}&maxResults=1`,
+      `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`subject:(${templateName})`)}&maxResults=1`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     if (!listRes.ok) return null;
