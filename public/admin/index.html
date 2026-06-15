@@ -73,7 +73,12 @@
 
     .status-msg { margin-top: 8px; font-size: 13px; color: #555; }
     .loading-text { color: #888; font-style: italic; }
+
+    /* Quill editor overrides */
+    #tmpl-editor-container { background: white; }
+    #tmpl-editor-container .ql-editor { min-height: 200px; font-family: Arial, sans-serif; font-size: 14px; }
   </style>
+  <link href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" rel="stylesheet">
 </head>
 <body>
 
@@ -158,18 +163,30 @@
   <!-- Email Templates -->
   <div class="card" id="templates-card" style="display:none">
     <h2>Email Templates</h2>
-    <p style="color:#666;margin-top:0">Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code></p>
-    <div class="template-tabs">
-      <button class="tab-btn active" onclick="showTemplate('initial_invite', this)">Initial Invite</button>
-      <button class="tab-btn" onclick="showTemplate('declined_notification', this)">Declined</button>
-      <button class="tab-btn" onclick="showTemplate('reschedule_confirmation', this)">Reschedule</button>
+    <p style="color:#666;margin-top:0">Edit the subject and body for each email type. Use <code>{{placeholders}}</code> in both.</p>
+
+    <div class="template-tabs" id="template-tabs">
+      <button class="tab-btn active" onclick="showTemplate('initial_invite')">Invite</button>
+      <button class="tab-btn" onclick="showTemplate('declined_notification')">Decline</button>
+      <button class="tab-btn" onclick="showTemplate('reschedule_confirmation')">Reschedule</button>
+      <button class="tab-btn" onclick="showTemplate('chase')">Chase</button>
+    </div>
+
+    <div style="margin-bottom:10px">
+      <label style="font-size:13px;font-weight:bold;display:block;margin-bottom:4px">Subject:</label>
+      <input type="text" id="tmpl-subject" style="width:100%">
     </div>
     <div>
-      <label style="font-size:13px;font-weight:bold">Subject</label>
-      <input type="text" id="tmpl-subject" style="width:100%;margin:6px 0 12px">
-      <label style="font-size:13px;font-weight:bold">HTML Body</label>
-      <textarea id="tmpl-body" rows="10"></textarea>
-      <button class="btn-primary" style="margin-top:8px" onclick="saveTemplate()">Save Template</button>
+      <label style="font-size:13px;font-weight:bold;display:block;margin-bottom:4px">Body:</label>
+      <div id="tmpl-editor-container"></div>
+    </div>
+    <p style="color:#666;font-size:12px;margin:8px 0 0">
+      Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Agent}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code>
+    </p>
+
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+      <button class="btn-primary" onclick="saveTemplate()">Save</button>
+      <button class="btn-secondary" onclick="showTemplate(activeTemplate)">Cancel</button>
       <span class="status-msg" id="tmpl-status"></span>
     </div>
   </div>
@@ -192,7 +209,6 @@
 
   let adminSecret = "";
   let currentProjectId = null;
-  let currentTemplateName = "initial_invite";
 
   function headers() {
     return {
@@ -223,6 +239,7 @@
     document.getElementById("auth-gate").style.display = "none";
     document.getElementById("app").style.display = "block";
     populateProjectDropdown(data);
+    initQuill();
     loadTemplates();
     document.getElementById("templates-card").style.display = "block";
     document.getElementById("email-queue-card").style.display = "block";
@@ -448,34 +465,61 @@
   }
 
   // ─── Email Templates ───────────────────────────────────────────────────────
-  let templates = {};
+  const TEMPLATE_NAMES = ["initial_invite", "declined_notification", "reschedule_confirmation", "chase"];
+  let templateCache = {};
+  let activeTemplate = "initial_invite";
+  let quillEditor = null;
+
+  function initQuill() {
+    if (quillEditor) return;
+    quillEditor = new Quill("#tmpl-editor-container", {
+      theme: "snow",
+      modules: {
+        toolbar: [
+          ["bold", "italic", "underline"],
+          [{ header: [1, 2, 3, false] }],
+          ["link"],
+          [{ list: "ordered" }, { list: "bullet" }],
+          ["clean"],
+        ],
+      },
+      placeholder: "Write your email body here...",
+    });
+  }
 
   async function loadTemplates() {
     const data = await api("admin-templates");
-    (data || []).forEach(t => { templates[t.name] = t; });
-    showTemplate(currentTemplateName, document.querySelector(".tab-btn.active"));
+    templateCache = {};
+    (Array.isArray(data) ? data : []).forEach(t => { templateCache[t.name] = t; });
+    showTemplate(activeTemplate);
+    document.getElementById("tmpl-status").textContent = "";
   }
 
-  function showTemplate(name, btn) {
-    currentTemplateName = name;
-    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-    if (btn) btn.classList.add("active");
-    const t = templates[name] || { subject: "", html_body: "" };
-    document.getElementById("tmpl-subject").value = t.subject;
-    document.getElementById("tmpl-body").value = t.html_body;
+  function showTemplate(name) {
+    activeTemplate = name;
+    document.querySelectorAll("#template-tabs .tab-btn").forEach((btn, i) => {
+      btn.classList.toggle("active", TEMPLATE_NAMES[i] === name);
+    });
+    const t = templateCache[name] || {};
+    document.getElementById("tmpl-subject").value = t.subject || "";
+    if (quillEditor) quillEditor.root.innerHTML = t.html_body || "";
     document.getElementById("tmpl-status").textContent = "";
   }
 
   async function saveTemplate() {
-    const subject = document.getElementById("tmpl-subject").value;
-    const html_body = document.getElementById("tmpl-body").value;
+    const subject = document.getElementById("tmpl-subject").value.trim();
+    const html_body = quillEditor ? quillEditor.root.innerHTML.trim() : "";
+    if (!subject || !html_body || html_body === "<p><br></p>") {
+      alert("Both subject and body are required.");
+      return;
+    }
     const data = await api("admin-templates", {
       method: "POST",
-      body: JSON.stringify({ name: currentTemplateName, subject, html_body }),
+      body: JSON.stringify({ name: activeTemplate, subject, html_body }),
     });
     const status = document.getElementById("tmpl-status");
     if (data.ok) {
-      templates[currentTemplateName] = { name: currentTemplateName, subject, html_body };
+      templateCache[activeTemplate] = { subject, html_body };
       status.textContent = "Saved.";
       status.style.color = "#28a745";
     } else {
@@ -520,5 +564,6 @@
     });
   }
 </script>
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
 </body>
 </html>
