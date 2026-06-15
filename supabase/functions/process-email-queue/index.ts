@@ -15,12 +15,6 @@ import { getSupabaseAdmin, json, cors } from "../_shared/supabase.ts";
 const MAX_ATTEMPTS = 5;
 const BATCH_SIZE   = 20;
 
-const DRAFT_LABEL_MAP: Record<string, string> = {
-  initial_invite:          "dob-invite",
-  declined_notification:   "dob-declined",
-  reschedule_confirmation: "dob-reschedule",
-  chase:                   "dob-chase",
-};
 
 // ─── Gmail OAuth2 ─────────────────────────────────────────────────────────────
 
@@ -83,14 +77,12 @@ async function getDraftTemplate(
   accessToken: string,
   templateName: string,
 ): Promise<{ subject: string; htmlBody: string } | null> {
-  // Use DRAFT_LABEL_MAP for legacy names, otherwise treat templateName as a direct Gmail label
-  const label = DRAFT_LABEL_MAP[templateName] || templateName;
-  if (!label) return null;
+  if (!templateName) return null;
 
   try {
-    // Search for a draft with this label
+    // Search for a draft whose subject starts with the configured prefix
     const listRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`label:${label}`)}&maxResults=1`,
+      `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`subject:${templateName}`)}&maxResults=1`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     if (!listRes.ok) return null;
