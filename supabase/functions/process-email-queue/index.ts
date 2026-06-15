@@ -114,6 +114,16 @@ async function listAllDrafts(accessToken: string): Promise<{ id: string; subject
   return _draftCache;
 }
 
+// Normalise dashes, whitespace and case for fuzzy subject matching.
+// Gmail often converts hyphens to en/em dashes in draft subjects.
+function normalise(s: string): string {
+  return s
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\uFE58\uFE63\uFF0D\u002D]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 async function getDraftTemplate(
   accessToken: string,
   templateName: string,
@@ -122,7 +132,8 @@ async function getDraftTemplate(
 
   try {
     const drafts = await listAllDrafts(accessToken);
-    const match = drafts.find((d) => d.subject === templateName);
+    const target = normalise(templateName);
+    const match = drafts.find((d) => normalise(d.subject) === target);
     if (!match) return null;
 
     // Fetch full content of the matched draft
