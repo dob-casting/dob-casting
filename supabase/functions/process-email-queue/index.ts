@@ -73,6 +73,47 @@ function extractHtmlFromPayload(payload: Record<string, unknown>): string {
   return "";
 }
 
+// Fetches all Gmail drafts and returns a map of subject -> { id, subject }.
+// Results are cached for the lifetime of the invocation.
+let _draftCache: { id: string; subject: string }[] | null = null;
+
+async function listAllDrafts(accessToken: string): Promise<{ id: string; subject: string }[]> {
+  if (_draftCache) return _draftCache;
+
+  const allDrafts: { id: string; messageId: string }[] = [];
+  let pageToken: string | undefined;
+
+  // Paginate through all drafts
+  do {
+    const url = `https://gmail.googleapis.com/gmail/v1/users/me/drafts?maxResults=100${pageToken ? `&pageToken=${pageToken}` : ""}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) break;
+    const data = await res.json();
+    for (const d of (data.drafts ?? []) as { id: string; message: { id: string } }[]) {
+      allDrafts.push({ id: d.id, messageId: d.message.id });
+    }
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  // Fetch subject header for each draft in parallel
+  const results = await Promise.all(
+    allDrafts.map(async (d) => {
+      const res = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${d.id}?format=metadata&metadataHeaders=Subject`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      const headers = (data.message?.payload?.headers ?? []) as { name: string; value: string }[];
+      const subject = headers.find((h) => h.name.toLowerCase() === "subject")?.value ?? "";
+      return { id: d.id, subject };
+    }),
+  );
+
+  _draftCache = results.filter((r): r is { id: string; subject: string } => r !== null);
+  return _draftCache;
+}
+
 async function getDraftTemplate(
   accessToken: string,
   templateName: string,
@@ -80,25 +121,13 @@ async function getDraftTemplate(
   if (!templateName) return null;
 
   try {
-    // Strip {{placeholders}} and Gmail search operators (- means NOT) so Gmail matches the static words
-    const searchTerms = templateName
-      .replace(/\{\{[^}]+\}\}/g, "")
-      .replace(/[-:(){}[\]"]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const listRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`subject:(${searchTerms})`)}&maxResults=1`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-    );
-    if (!listRes.ok) return null;
+    const drafts = await listAllDrafts(accessToken);
+    const match = drafts.find((d) => d.subject === templateName);
+    if (!match) return null;
 
-    const listData = await listRes.json();
-    const drafts = (listData.drafts as { id: string }[]) ?? [];
-    if (drafts.length === 0) return null;
-
-    // Fetch full draft content
+    // Fetch full content of the matched draft
     const draftRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${drafts[0].id}?format=full`,
+      `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${match.id}?format=full`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     if (!draftRes.ok) return null;
@@ -107,12 +136,8 @@ async function getDraftTemplate(
     const payload = draftData.message?.payload as Record<string, unknown> | undefined;
     if (!payload) return null;
 
-    // Extract subject from headers
-    const headers = (payload.headers as { name: string; value: string }[]) ?? [];
-    const subject = headers.find((h) => h.name.toLowerCase() === "subject")?.value ?? "";
     const htmlBody = extractHtmlFromPayload(payload);
-
-    return { subject, htmlBody };
+    return { subject: match.subject, htmlBody };
   } catch {
     return null;
   }
