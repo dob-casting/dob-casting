@@ -80,8 +80,12 @@ async function getDraftTemplate(
   if (!templateName) return null;
 
   try {
-    // Strip {{placeholders}} from the search query so Gmail can match the static words
-    const searchTerms = templateName.replace(/\{\{[^}]+\}\}/g, "").replace(/\s+/g, " ").trim();
+    // Strip {{placeholders}} and Gmail search operators (- means NOT) so Gmail matches the static words
+    const searchTerms = templateName
+      .replace(/\{\{[^}]+\}\}/g, "")
+      .replace(/[-:(){}[\]"]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
     const listRes = await fetch(
       `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`subject:(${searchTerms})`)}&maxResults=1`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
