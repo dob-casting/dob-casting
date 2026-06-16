@@ -1,6 +1,6 @@
-// admin-templates — read and update email templates
-// GET  /functions/v1/admin-templates           → list all templates
-// POST /functions/v1/admin-templates           → { name, subject, html_body }
+// admin-templates — read and update email templates (per project)
+// GET  /functions/v1/admin-templates?project_id=xxx   → list templates for project
+// POST /functions/v1/admin-templates                  → { project_id, name, subject, html_body }
 
 import { getSupabaseAdmin, json, cors, requireAdminAuth } from "../_shared/supabase.ts";
 
@@ -10,24 +10,31 @@ Deno.serve(async (req: Request) => {
   const supabase = getSupabaseAdmin();
 
   if (req.method === "GET") {
+    const url = new URL(req.url);
+    const project_id = url.searchParams.get("project_id");
+    if (!project_id) return json({ error: "project_id is required" }, 400);
+
     const { data, error } = await supabase
       .from("email_templates")
-      .select("name, subject, html_body, updated_at");
+      .select("name, subject, html_body, updated_at")
+      .eq("project_id", project_id);
     if (error) return json({ error: error.message }, 500);
     return json(data);
   }
 
   if (req.method === "POST") {
     const body = await req.json();
-    const { name, subject, html_body } = body;
-    if (!name || !subject || !html_body) {
-      return json({ error: "name, subject, and html_body are all required" }, 400);
+    const { project_id, name, subject, html_body } = body;
+    if (!project_id || !name || !subject || !html_body) {
+      return json({ error: "project_id, name, subject, and html_body are all required" }, 400);
     }
 
     const { error } = await supabase
       .from("email_templates")
-      .upsert({ name, subject, html_body, updated_at: new Date().toISOString() })
-      .eq("name", name);
+      .upsert(
+        { project_id, name, subject, html_body, updated_at: new Date().toISOString() },
+        { onConflict: "project_id,name" },
+      );
 
     if (error) return json({ error: error.message }, 500);
     return json({ ok: true });

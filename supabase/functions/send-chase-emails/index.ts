@@ -125,9 +125,9 @@ Deno.serve(async (req: Request) => {
   const { data: slots, error: slotsErr } = await supabase
     .from("slots")
     .select(`
-      id, first_name, last_name, email, role, agent,
+      id, project_id, first_name, last_name, email, role, agent,
       slot_date, slot_time, short_link,
-      projects ( cc_email, chase_paused, tpl_chase )
+      projects ( cc_email, chase_paused )
     `)
     .in("status", STATUSES_TO_CHASE)
     .not("email", "is", null)
@@ -172,10 +172,8 @@ Deno.serve(async (req: Request) => {
 
   const candidates = slots.filter((slot) => {
     // Skip slots from projects with chase paused.
-    const proj = slot.projects as { cc_email: string | null; chase_paused: boolean; tpl_chase: string | null } | null;
+    const proj = slot.projects as { cc_email: string | null; chase_paused: boolean } | null;
     if (proj?.chase_paused) return false;
-    if (!proj?.tpl_chase) return false;
-
     // Precise 48h check: appointment must be more than 48h away.
     const appointmentMs = new Date(`${slot.slot_date}T${slot.slot_time}Z`).getTime();
     if (appointmentMs <= cutoffMs) return false;
@@ -197,7 +195,7 @@ Deno.serve(async (req: Request) => {
   const batch = candidates.slice(0, MAX_PER_RUN);
 
   const rows = batch.map((slot) => {
-    const project = slot.projects as { cc_email: string | null; chase_paused: boolean; tpl_chase: string | null } | null;
+    const project = slot.projects as { cc_email: string | null; chase_paused: boolean } | null;
     const dateStr = slot.slot_date as string;
     const timeStr = (slot.slot_time as string).slice(0, 5); // HH:MM
 
@@ -211,8 +209,9 @@ Deno.serve(async (req: Request) => {
 
     return {
       slot_id:          slot.id,
+      project_id:       slot.project_id,
       recipient_email:  slot.email,
-      template_name:    project!.tpl_chase!,
+      template_name:    "chase",
       template_vars:    {
         "First Name":  slot.first_name ?? "",
         "Second Name": slot.last_name ?? "",

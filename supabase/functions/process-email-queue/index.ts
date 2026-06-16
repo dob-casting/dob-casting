@@ -86,7 +86,7 @@ Deno.serve(async (req: Request) => {
   // 1. Claim a batch of pending or failed rows
   const { data: rows, error: fetchErr } = await supabase
     .from("email_queue")
-    .select("id, slot_id, recipient_email, template_name, template_vars, attempts, cc")
+    .select("id, slot_id, project_id, recipient_email, template_name, template_vars, attempts, cc")
     .in("status", ["pending", "failed"])
     .lt("attempts", MAX_ATTEMPTS)
     .order("created_at", { ascending: true })
@@ -122,12 +122,12 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Gmail token refresh failed", detail: String(err) }, 500);
   }
 
-  // 4. Load templates from DB
-  const templateNames = [...new Set(rows.map((r) => r.template_name as string))];
+  // 4. Load templates from DB (per project)
+  const projectIds = [...new Set(rows.map((r) => r.project_id as string).filter(Boolean))];
   const { data: dbTemplates, error: tmplErr } = await supabase
     .from("email_templates")
-    .select("name, subject, html_body")
-    .in("name", templateNames);
+    .select("project_id, name, subject, html_body")
+    .in("project_id", projectIds.length > 0 ? projectIds : ["00000000-0000-0000-0000-000000000000"]);
 
   if (tmplErr) {
     console.error("Failed to load templates:", tmplErr.message);
@@ -139,26 +139,24 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Template load failed", detail: tmplErr.message }, 500);
   }
 
+  // Key: "project_id:template_name"
   const templateMap: Record<string, { subject: string; html_body: string }> = {};
   for (const t of dbTemplates ?? []) {
     if (!t.subject || !t.html_body) {
-      console.warn(`Template "${t.name}": missing subject or html_body, skipping`);
+      console.warn(`Template "${t.project_id}:${t.name}": missing subject or html_body, skipping`);
       continue;
     }
-    console.log(`Template "${t.name}": loaded (subject: "${t.subject}")`);
-    templateMap[t.name] = { subject: t.subject, html_body: t.html_body };
-  }
-
-  const missing = templateNames.filter((n) => !templateMap[n]);
-  if (missing.length > 0) {
-    console.error(`Missing templates: ${missing.join(", ")}`);
+    const key = `${t.project_id}:${t.name}`;
+    console.log(`Template "${key}": loaded (subject: "${t.subject}")`);
+    templateMap[key] = { subject: t.subject, html_body: t.html_body };
   }
 
   // 5. Send all emails in parallel
   const results = await Promise.allSettled(
     rows.map(async (row) => {
-      const tmpl = templateMap[row.template_name as string];
-      if (!tmpl) throw new Error(`Template not found: ${row.template_name}. Create it in the admin portal.`);
+      const tmplKey = `${row.project_id}:${row.template_name}`;
+      const tmpl = templateMap[tmplKey];
+      if (!tmpl) throw new Error(`Template not found: ${tmplKey}. Create it in the admin portal.`);
 
       const vars = row.template_vars as Record<string, string>;
       const subject  = renderTemplate(tmpl.subject, vars);

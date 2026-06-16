@@ -90,7 +90,7 @@ Deno.serve(async (req: Request) => {
       if (slot.status !== "empty") return json({ error: "Slot is not empty" }, 409);
 
       const { data: proj } = await supabase
-        .from("projects").select("cc_email, tpl_invite").eq("id", entry.project_id).single();
+        .from("projects").select("cc_email").eq("id", entry.project_id).single();
       const cc = proj?.cc_email || null;
 
       const token = crypto.randomUUID();
@@ -114,11 +114,12 @@ Deno.serve(async (req: Request) => {
         weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
       });
 
-      if (proj?.tpl_invite) {
+      {
         await supabase.from("email_queue").upsert({
           slot_id:         slot.id,
+          project_id:      entry.project_id,
           recipient_email: entry.email,
-          template_name:   proj.tpl_invite,
+          template_name:   "initial_invite",
           template_vars: {
             "First Name":  entry.first_name,
             "Second Name": entry.last_name,

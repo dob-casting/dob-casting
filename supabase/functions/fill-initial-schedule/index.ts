@@ -93,6 +93,7 @@ Deno.serve(async (req: Request) => {
   // Build and bulk-insert all email_queue rows
   const emailRows = assignments.map(({ slot, tbin, link }) => ({
     slot_id:         slot.id,
+    project_id,
     recipient_email: tbin.email,
     template_name:   "initial_invite",
     template_vars: {

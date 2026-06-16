@@ -75,7 +75,7 @@ Deno.serve(async (req: Request) => {
       if (!slot || !slot.first_name) return json({ error: "Slot not found or already empty" }, 404);
 
       const { data: proj } = await supabase
-        .from("projects").select("tbin_paused, cc_email, tpl_invite, tpl_decline").eq("id", slot.project_id).single();
+        .from("projects").select("tbin_paused, cc_email").eq("id", slot.project_id).single();
       const cc = proj?.cc_email || null;
 
       const dateStr = new Date(slot.slot_date).toLocaleDateString("en-GB", {
@@ -95,12 +95,13 @@ Deno.serve(async (req: Request) => {
         reason:     "removed",
       });
 
-      // Queue declined notification (only if template configured)
-      if (proj?.tpl_decline) {
+      // Queue declined notification
+      {
         await supabase.from("email_queue").insert({
           slot_id:         null,
+          project_id:      slot.project_id,
           recipient_email: slot.email,
-          template_name:   proj.tpl_decline,
+          template_name:   "declined_notification",
           template_vars: {
             "First Name":  slot.first_name,
             "Second Name": slot.last_name,
@@ -157,11 +158,12 @@ Deno.serve(async (req: Request) => {
           short_link:  autoLink,
         }).eq("id", slot.id);
 
-        if (proj?.tpl_invite) {
+        {
           await supabase.from("email_queue").upsert({
             slot_id:         slot.id,
+            project_id:      slot.project_id,
             recipient_email: c.email,
-            template_name:   proj.tpl_invite,
+            template_name:   "initial_invite",
             template_vars: {
               "First Name":  c.first_name,
               "Second Name": c.last_name,
