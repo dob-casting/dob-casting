@@ -318,7 +318,6 @@
     populateProjectDropdown(data);
     document.getElementById("email-queue-card").style.display = "block";
     initQuill();
-    loadTemplates();
     loadEmailQueue();
     return true;
   }
@@ -396,6 +395,7 @@
     updateChasePauseUI();
     loadSchedule();
     loadTBIN();
+    loadTemplates();
   }
 
   async function renameProject() {
@@ -909,7 +909,8 @@
   }
 
   async function loadTemplates() {
-    const data = await api("admin-templates");
+    if (!currentProjectId) return;
+    const data = await api(`admin-templates?project_id=${currentProjectId}`);
     templateCache = {};
     (Array.isArray(data) ? data : []).forEach(t => { templateCache[t.name] = t; });
     showTemplate(activeTemplate);
@@ -936,7 +937,7 @@
     }
     const data = await api("admin-templates", {
       method: "POST",
-      body: JSON.stringify({ name: activeTemplate, subject, html_body }),
+      body: JSON.stringify({ project_id: currentProjectId, name: activeTemplate, subject, html_body }),
     });
     const status = document.getElementById("tmpl-status");
     if (data.ok) {
