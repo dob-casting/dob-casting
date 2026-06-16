@@ -240,10 +240,14 @@
     document.getElementById("app").style.display = "block";
     populateProjectDropdown(data);
     initQuill();
-    loadTemplates();
-    document.getElementById("templates-card").style.display = "block";
     document.getElementById("email-queue-card").style.display = "block";
     loadEmailQueue();
+    // Restore last selected project
+    const lastProjectId = localStorage.getItem("lastProjectId");
+    if (lastProjectId) {
+      document.getElementById("project-select").value = lastProjectId;
+      loadProject();
+    }
   }
 
   // ─── Projects ──────────────────────────────────────────────────────────────
@@ -279,11 +283,14 @@
   function loadProject() {
     currentProjectId = document.getElementById("project-select").value;
     if (!currentProjectId) return;
+    localStorage.setItem("lastProjectId", currentProjectId);
     document.getElementById("fill-card").style.display = "block";
     document.getElementById("schedule-card").style.display = "block";
     document.getElementById("tbin-card").style.display = "block";
     loadSchedule();
     loadTBIN();
+    document.getElementById("templates-card").style.display = "block";
+    loadTemplates();
   }
 
   // ─── Fill Initial Schedule ─────────────────────────────────────────────────
@@ -488,7 +495,8 @@
   }
 
   async function loadTemplates() {
-    const data = await api("admin-templates");
+    if (!currentProjectId) return;
+    const data = await api(`admin-templates?project_id=${currentProjectId}`);
     templateCache = {};
     (Array.isArray(data) ? data : []).forEach(t => { templateCache[t.name] = t; });
     showTemplate(activeTemplate);
@@ -515,7 +523,7 @@
     }
     const data = await api("admin-templates", {
       method: "POST",
-      body: JSON.stringify({ name: activeTemplate, subject, html_body }),
+      body: JSON.stringify({ project_id: currentProjectId, name: activeTemplate, subject, html_body }),
     });
     const status = document.getElementById("tmpl-status");
     if (data.ok) {
