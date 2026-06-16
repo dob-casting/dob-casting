@@ -929,6 +929,10 @@
   }
 
   async function saveTemplate() {
+    if (!currentProjectId) {
+      alert("Please select a project first.");
+      return;
+    }
     const subject = document.getElementById("tmpl-subject").value.trim();
     const html_body = quillEditor ? quillEditor.root.innerHTML.trim() : "";
     if (!subject || !html_body || html_body === "<p><br></p>") {
