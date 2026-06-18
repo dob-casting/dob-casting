@@ -74,9 +74,33 @@
     .status-msg { margin-top: 8px; font-size: 13px; color: #555; }
     .loading-text { color: #888; font-style: italic; }
 
+    /* Scrollable table wrapper for mobile */
+    .table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    /* Mobile responsive */
+    @media (max-width: 640px) {
+      body { padding: 10px; }
+      h1 { font-size: 20px; }
+      .card { padding: 14px; }
+      .card h2 { font-size: 16px; }
+      .row { flex-direction: column; align-items: stretch; }
+      .row > * { width: 100% !important; min-width: 0 !important; }
+      select, input[type=text], input[type=date], input[type=time], input[type=email] {
+        width: 100%; font-size: 16px; /* prevents iOS zoom */
+      }
+      button { width: 100%; }
+      .add-form { flex-direction: column; }
+      .add-form input { width: 100%; min-width: 0; }
+      table { font-size: 12px; }
+      th, td { padding: 7px 5px; }
+      /* Hide less critical columns on mobile */
+      .col-email, .col-agent { display: none; }
+    }
     /* Quill editor overrides */
     #tmpl-editor-container { background: white; }
     #tmpl-editor-container .ql-editor { min-height: 200px; font-family: Arial, sans-serif; font-size: 14px; }
+    #chase-editor-container { background: white; }
+    #chase-editor-container .ql-editor { min-height: 150px; font-family: Arial, sans-serif; font-size: 14px; }
   </style>
   <link href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" rel="stylesheet">
 </head>
@@ -93,7 +117,10 @@
 
 <!-- Main app -->
 <div id="app">
-  <h1>Audition Admin</h1>
+  <div style="display:flex;justify-content:space-between;align-items:baseline">
+    <h1>Audition Admin</h1>
+    <button class="btn-secondary" onclick="signOut()" style="font-size:13px;padding:6px 12px">Sign out</button>
+  </div>
   <p class="subtitle">Manage projects, schedule, and TBIN queue.</p>
 
   <!-- Project selector -->
@@ -105,6 +132,13 @@
       </select>
       <input type="text" id="new-project-name" placeholder="New project name" style="width:200px">
       <button class="btn-primary" onclick="createProject()">Create Project</button>
+    </div>
+    <div id="project-actions" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #eee">
+      <div class="row">
+        <input type="text" id="rename-input" placeholder="New name" style="width:180px">
+        <button class="btn-secondary" onclick="renameProject()">Rename</button>
+        <button class="btn-danger" style="margin-left:auto" onclick="deleteProject()">Delete Project</button>
+      </div>
     </div>
   </div>
 
@@ -147,21 +181,61 @@
     <div id="schedule-table"><p class="loading-text">Loading schedule...</p></div>
   </div>
 
+  <!-- Chase Emails -->
+  <div class="card" id="chase-card" style="display:none">
+    <h2>Chase Emails</h2>
+    <div id="chase-slots-list"><p class="loading-text">No chaseable slots.</p></div>
+    <div style="margin-top:12px">
+      <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn-secondary" style="font-size:12px;padding:5px 12px" onclick="selectAllChase(true)">Select All</button>
+        <button class="btn-secondary" style="font-size:12px;padding:5px 12px" onclick="selectAllChase(false)">None</button>
+      </div>
+      <label style="font-size:13px;font-weight:bold;display:block;margin-bottom:4px">Subject:</label>
+      <input type="text" id="chase-subject" style="width:100%;margin-bottom:10px">
+      <label style="font-size:13px;font-weight:bold;display:block;margin-bottom:4px">Body:</label>
+      <div id="chase-editor-container"></div>
+      <p style="color:#666;font-size:12px;margin:8px 0 0">
+        Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Agent}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code>
+      </p>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <button class="btn-primary" id="chase-send-btn" onclick="sendChase()" disabled>Send chase to 0 selected</button>
+        <span class="status-msg" id="chase-status"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- TBIN Queue -->
   <div class="card" id="tbin-card" style="display:none">
-    <h2>TBIN Queue</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:0">
+      <h2 style="margin:0;border:none;padding:0">TBIN Queue</h2>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="tbin-pause-label" style="font-size:13px"></span>
+        <button id="tbin-pause-btn" style="font-size:12px;padding:5px 12px" onclick="toggleTBINPause()"></button>
+      </div>
+    </div>
     <div id="tbin-list"><p class="loading-text">Loading queue...</p></div>
     <div class="add-form">
       <input type="text"  id="tbin-first"  placeholder="First name">
       <input type="text"  id="tbin-last"   placeholder="Last name">
+      <input type="text"  id="tbin-agent"  placeholder="Agent (optional)">
       <input type="email" id="tbin-email"  placeholder="Email">
       <input type="text"  id="tbin-role"   placeholder="Role">
       <button class="btn-success" onclick="addToTBIN()">Add to Queue</button>
+      <button class="btn-secondary" onclick="toggleTBINBulk()">Bulk Import</button>
+    </div>
+    <div id="tbin-bulk-form" style="display:none;margin-top:12px;padding:12px;background:#f8f9fa;border-radius:6px;">
+      <p style="margin:0 0 8px;font-size:13px;color:#555">Paste five columns from a spreadsheet: <strong>First Name, Last Name, Agent, Email, Role</strong> — one actor per row. Agent is optional (leave blank).</p>
+      <textarea id="tbin-bulk-input" rows="8" style="width:100%;font-family:monospace;font-size:13px;padding:8px;border:1px solid #ccc;border-radius:4px;" placeholder="John&#9;Smith&#9;BigAgency&#9;john@example.com&#9;Actor&#10;Jane&#9;Doe&#9;&#9;jane@example.com&#9;Singer"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn-success" onclick="bulkAddTBIN()">Import</button>
+        <button class="btn-secondary" onclick="toggleTBINBulk()">Cancel</button>
+        <span id="tbin-bulk-status" style="font-size:13px;color:#555;margin-left:8px"></span>
+      </div>
     </div>
   </div>
 
   <!-- Email Templates -->
-  <div class="card" id="templates-card" style="display:none">
+  <div class="card" id="templates-card">
     <h2>Email Templates</h2>
     <p style="color:#666;margin-top:0">Edit the subject and body for each email type. Use <code>{{placeholders}}</code> in both.</p>
 
@@ -189,6 +263,15 @@
       <button class="btn-secondary" onclick="showTemplate(activeTemplate)">Cancel</button>
       <span class="status-msg" id="tmpl-status"></span>
     </div>
+
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;font-size:13px;color:#666;user-select:none">Gmail not sending? Re-authorise here</summary>
+      <div style="margin-top:12px;padding:12px;background:#fff3cd;border-radius:6px;font-size:13px;color:#856404">
+        <p style="margin:0 0 10px">If emails aren't sending, the OAuth token may need updating.</p>
+        <button class="btn-primary" style="font-size:13px;padding:8px 16px" onclick="startGmailReauth()">Re-authorise Gmail Access</button>
+        <p style="margin:10px 0 0;color:#666">After authorising, copy the refresh token shown and update the <strong>GMAIL_REFRESH_TOKEN</strong> secret in your Supabase project settings.</p>
+      </div>
+    </details>
   </div>
 
   <!-- Email Queue Status -->
@@ -204,11 +287,16 @@
 
 <script>
   // ─── Configuration ─────────────────────────────────────────────────────────
-  // Replace with your Supabase project URL
-  const API_BASE = "https://oaltkxblacpjjecpauya.supabase.co/functions/v1";
+  const API_BASE     = "https://oaltkxblacpjjecpauya.supabase.co/functions/v1";
+  const ACTOR_PORTAL = "https://dob-casting.github.io/audition";
 
   let adminSecret = "";
   let currentProjectId = null;
+  let currentProjectTBINPaused = false;
+  let allProjects = [];
+  let editingSlotId = null;
+  let cachedSchedule = [];
+  let chaseQuillEditor = null;
 
   function headers() {
     return {
@@ -218,43 +306,66 @@
   }
 
   async function api(path, opts = {}) {
-    const res = await fetch(`${API_BASE}/${path}`, { ...opts, headers: { ...headers(), ...(opts.headers ?? {}) } });
-    return res.json().catch(() => ({ error: "Invalid response" }));
+    try {
+      const res = await fetch(`${API_BASE}/${path}`, { ...opts, headers: { ...headers(), ...(opts.headers ?? {}) } });
+      return res.json().catch(() => ({ error: "Invalid response" }));
+    } catch (err) {
+      return { error: String(err) };
+    }
   }
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
-  async function login() {
-    const val = document.getElementById("secret-input").value.trim();
-    if (!val) return;
-    adminSecret = val;
-
-    // Test the secret by listing projects
+  async function loginWithSecret(secret) {
+    adminSecret = secret;
     const data = await api("admin-projects");
-    if (data.error && data.error === "Unauthorized") {
-      document.getElementById("auth-error").style.display = "block";
+    if (!data || (data.error && data.error === "Unauthorized")) {
       adminSecret = "";
-      return;
+      return false;
     }
-
+    localStorage.setItem("adminSecret", secret);
     document.getElementById("auth-gate").style.display = "none";
     document.getElementById("app").style.display = "block";
     populateProjectDropdown(data);
-    initQuill();
     document.getElementById("email-queue-card").style.display = "block";
+    initQuill();
     loadEmailQueue();
     // Restore last selected project
     const lastProjectId = localStorage.getItem("lastProjectId");
-    if (lastProjectId) {
+    if (lastProjectId && allProjects.find(p => p.id === lastProjectId)) {
       document.getElementById("project-select").value = lastProjectId;
       loadProject();
     }
+    return true;
   }
+
+  async function login() {
+    const val = document.getElementById("secret-input").value.trim();
+    if (!val) return;
+    const ok = await loginWithSecret(val);
+    if (!ok) document.getElementById("auth-error").style.display = "block";
+  }
+
+  function signOut() {
+    localStorage.removeItem("adminSecret");
+    adminSecret = "";
+    currentProjectId = null;
+    document.getElementById("app").style.display = "none";
+    document.getElementById("auth-gate").style.display = "block";
+    document.getElementById("secret-input").value = "";
+  }
+
+  // Auto-login from localStorage
+  (async () => {
+    const saved = localStorage.getItem("adminSecret");
+    if (saved) await loginWithSecret(saved);
+  })();
 
   // ─── Projects ──────────────────────────────────────────────────────────────
   function populateProjectDropdown(projects) {
+    allProjects = projects || [];
     const sel = document.getElementById("project-select");
     sel.innerHTML = '<option value="">— Select project —</option>';
-    (projects || []).forEach(p => {
+    allProjects.forEach(p => {
       const opt = document.createElement("option");
       opt.value = p.id;
       opt.textContent = p.name;
@@ -282,15 +393,84 @@
 
   function loadProject() {
     currentProjectId = document.getElementById("project-select").value;
-    if (!currentProjectId) return;
+    if (!currentProjectId) {
+      document.getElementById("project-actions").style.display = "none";
+      return;
+    }
     localStorage.setItem("lastProjectId", currentProjectId);
+    const proj = allProjects.find(p => p.id === currentProjectId);
+    currentProjectTBINPaused = proj?.tbin_paused ?? false;
+    document.getElementById("project-actions").style.display = "block";
+    document.getElementById("rename-input").value = "";
     document.getElementById("fill-card").style.display = "block";
     document.getElementById("schedule-card").style.display = "block";
+    document.getElementById("chase-card").style.display = "block";
     document.getElementById("tbin-card").style.display = "block";
+    updateTBINPauseUI();
     loadSchedule();
     loadTBIN();
-    document.getElementById("templates-card").style.display = "block";
     loadTemplates();
+  }
+
+  async function renameProject() {
+    const name = document.getElementById("rename-input").value.trim();
+    if (!name) return;
+    if (!confirm(`Rename to "${name}"?`)) return;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "rename", id: currentProjectId, name }),
+    });
+    if (data.error) { alert(data.error); return; }
+    document.getElementById("rename-input").value = "";
+    const projects = await api("admin-projects");
+    populateProjectDropdown(projects);
+    document.getElementById("project-select").value = currentProjectId;
+  }
+
+  async function deleteProject() {
+    const proj = allProjects.find(p => p.id === currentProjectId);
+    if (!confirm(`Delete "${proj?.name}"? This will permanently delete all slots and cannot be undone.`)) return;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "delete", id: currentProjectId }),
+    });
+    if (data.error) { alert(data.error); return; }
+    currentProjectId = null;
+    ["fill-card","schedule-card","tbin-card","project-actions"].forEach(id => {
+      document.getElementById(id).style.display = "none";
+    });
+    const projects = await api("admin-projects");
+    populateProjectDropdown(projects);
+  }
+
+  async function toggleTBINPause() {
+    const newPaused = !currentProjectTBINPaused;
+    const data = await api("admin-projects", {
+      method: "POST",
+      body: JSON.stringify({ action: "set_tbin_paused", id: currentProjectId, paused: newPaused }),
+    });
+    if (data.error) { alert(data.error); return; }
+    currentProjectTBINPaused = newPaused;
+    // Update in local cache too
+    const proj = allProjects.find(p => p.id === currentProjectId);
+    if (proj) proj.tbin_paused = newPaused;
+    updateTBINPauseUI();
+  }
+
+  function updateTBINPauseUI() {
+    const label = document.getElementById("tbin-pause-label");
+    const btn   = document.getElementById("tbin-pause-btn");
+    if (currentProjectTBINPaused) {
+      label.textContent = "Auto-fill paused";
+      label.style.color = "#dc3545";
+      btn.textContent   = "Resume";
+      btn.className     = "btn-success";
+    } else {
+      label.textContent = "Auto-fill on";
+      label.style.color = "#28a745";
+      btn.textContent   = "Pause";
+      btn.className     = "btn-secondary";
+    }
   }
 
   // ─── Fill Initial Schedule ─────────────────────────────────────────────────
@@ -318,23 +498,64 @@
   // ─── Schedule ──────────────────────────────────────────────────────────────
   async function loadSchedule() {
     const data = await api(`admin-schedule?project_id=${currentProjectId}`);
+    cachedSchedule = Array.isArray(data) ? data : [];
     const el = document.getElementById("schedule-table");
-    if (!data || data.error) { el.innerHTML = `<p style="color:red">${data?.error || "Error"}</p>`; return; }
-    if (data.length === 0) { el.innerHTML = '<p class="loading-text">No slots yet. Add some above.</p>'; return; }
+    if (!data || data.error) { el.innerHTML = `<p style="color:red">${data?.error || "Error"}</p>`; renderChaseSlots(); return; }
+    if (data.length === 0) { el.innerHTML = '<p class="loading-text">No slots yet. Add some above.</p>'; renderChaseSlots(); return; }
 
-    el.innerHTML = `<table>
-      <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th>Role</th><th>Status</th><th></th></tr></thead>
-      <tbody>${data.map(s => `
-        <tr>
+    el.innerHTML = `<div class="table-scroll"><table>
+      <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th class="col-agent">Agent</th><th>Role</th><th>Status</th><th>Link</th><th></th></tr></thead>
+      <tbody>${data.map(s => {
+        const actorLink = s.first_name && s.magic_token ? `${ACTOR_PORTAL}?id=${s.magic_token}` : null;
+        const linkCell = actorLink
+          ? `<button onclick="copyLink('${actorLink}')" style="padding:3px 8px;font-size:12px;background:#e9ecef;color:#333;border:1px solid #ccc;border-radius:4px;cursor:pointer" title="${actorLink}">🔗 Copy</button>`
+          : '<span style="color:#ccc">—</span>';
+        if (editingSlotId === s.id) {
+          return `<tr id="row-${s.id}">
+            <td><input type="date" id="edit-date-${s.id}" value="${s.slot_date}" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px"></td>
+            <td><input type="time" id="edit-time-${s.id}" value="${s.slot_time?.slice(0,5)}" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px"></td>
+            <td colspan="2">${s.first_name ? `${s.first_name} ${s.last_name}` : '<span style="color:#ccc">—</span>'}</td>
+            <td class="col-agent">${s.agent || '<span style="color:#ccc">—</span>'}</td>
+            <td><span class="badge badge-${s.status}">${s.status.replace(/_/g,' ')}</span></td>
+            <td>${linkCell}</td>
+            <td style="white-space:nowrap">
+              <button class="btn-success" style="padding:4px 10px;font-size:12px" onclick="saveSlot('${s.id}')">Save</button>
+              <button class="btn-secondary" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="cancelEdit()">Cancel</button>
+            </td>
+          </tr>`;
+        }
+        return `<tr id="row-${s.id}">
           <td>${formatDate(s.slot_date)}</td>
           <td>${s.slot_time?.slice(0,5)}</td>
           <td>${s.first_name ? `${s.first_name} ${s.last_name}` : '<span style="color:#ccc">—</span>'}</td>
+          <td class="col-agent" style="color:#666;font-size:13px">${s.agent || '<span style="color:#ccc">—</span>'}</td>
           <td>${s.role || '<span style="color:#ccc">—</span>'}</td>
           <td><span class="badge badge-${s.status}">${s.status.replace(/_/g,' ')}</span></td>
-          <td>${s.first_name ? `<button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="removeActor('${s.id}')">Remove</button>` : ''}</td>
-        </tr>`).join("")}
+          <td>${linkCell}</td>
+          <td style="white-space:nowrap">
+            <button class="btn-secondary" style="padding:4px 10px;font-size:12px" onclick="startEdit('${s.id}')">Edit</button>
+            ${s.first_name ? `<button class="btn-danger" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="removeActor('${s.id}')">Remove</button>` : ''}
+          </td>
+        </tr>`;
+      }).join("")}
       </tbody>
-    </table>`;
+    </table></div>`;
+    renderChaseSlots();
+  }
+
+  function startEdit(slotId) { editingSlotId = slotId; loadSchedule(); }
+  function cancelEdit() { editingSlotId = null; loadSchedule(); }
+
+  async function saveSlot(slotId) {
+    const slot_date = document.getElementById(`edit-date-${slotId}`).value;
+    const slot_time = document.getElementById(`edit-time-${slotId}`).value;
+    const data = await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "edit_slot", slot_id: slotId, slot_date, slot_time }),
+    });
+    if (data.error) { alert(`Error: ${data.error}`); return; }
+    editingSlotId = null;
+    loadSchedule();
   }
 
   function toggleSlotForm() {
@@ -433,7 +654,8 @@
 
   // ─── TBIN Queue ────────────────────────────────────────────────────────────
   async function loadTBIN() {
-    const data = await api("admin-tbin");
+    if (!currentProjectId) return;
+    const data = await api(`admin-tbin?project_id=${currentProjectId}`);
     const el = document.getElementById("tbin-list");
     if (!data || data.error) { el.innerHTML = `<p style="color:red">${data?.error || "Error"}</p>`; return; }
     if (data.length === 0) { el.innerHTML = '<p class="loading-text">Queue is empty.</p>'; return; }
@@ -441,7 +663,7 @@
     el.innerHTML = data.map(a => `
       <div class="tbin-item">
         <div>
-          <div class="name">${a.first_name} ${a.last_name}</div>
+          <div class="name">${a.first_name} ${a.last_name}${a.agent ? ` <span style="font-weight:normal;color:#888;font-size:13px">via ${a.agent}</span>` : ''}</div>
           <div class="role">${a.role} · <span class="email">${a.email}</span></div>
         </div>
         <button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="removeFromTBIN('${a.id}')">Remove</button>
@@ -451,16 +673,18 @@
   async function addToTBIN() {
     const first = document.getElementById("tbin-first").value.trim();
     const last  = document.getElementById("tbin-last").value.trim();
+    const agent = document.getElementById("tbin-agent").value.trim();
     const email = document.getElementById("tbin-email").value.trim();
     const role  = document.getElementById("tbin-role").value.trim();
-    if (!first || !last || !email || !role) { alert("Please fill all fields."); return; }
+    if (!first || !last || !email || !role) { alert("Please fill all required fields."); return; }
 
     await api("admin-tbin", {
       method: "POST",
-      body: JSON.stringify({ action: "add", first_name: first, last_name: last, email, role }),
+      body: JSON.stringify({ action: "add", project_id: currentProjectId, first_name: first, last_name: last, agent: agent || null, email, role }),
     });
     document.getElementById("tbin-first").value = "";
     document.getElementById("tbin-last").value = "";
+    document.getElementById("tbin-agent").value = "";
     document.getElementById("tbin-email").value = "";
     document.getElementById("tbin-role").value = "";
     loadTBIN();
@@ -471,6 +695,55 @@
     loadTBIN();
   }
 
+  function toggleTBINBulk() {
+    const f = document.getElementById("tbin-bulk-form");
+    f.style.display = f.style.display === "none" ? "block" : "none";
+    document.getElementById("tbin-bulk-status").textContent = "";
+  }
+
+  function parseTBINBulk(raw) {
+    const actors = [];
+    for (const line of raw.split("\n")) {
+      const parts = line.trim().split(/\t|,/).map(p => p.trim());
+      if (parts.length < 4) continue;
+      // Support both 4-column (no agent) and 5-column (with agent) formats
+      let first_name, last_name, agent, email, role;
+      if (parts.length >= 5 && parts[3].includes("@")) {
+        // 5-col: first, last, agent, email, role
+        [first_name, last_name, agent, email, role] = parts;
+      } else {
+        // 4-col: first, last, email, role
+        [first_name, last_name, email, role] = parts;
+        agent = "";
+      }
+      if (!first_name || !last_name || !email || !role) continue;
+      if (!email.includes("@")) continue;
+      actors.push({ first_name, last_name, agent: agent || null, email, role });
+    }
+    return actors;
+  }
+
+  async function bulkAddTBIN() {
+    const raw = document.getElementById("tbin-bulk-input").value;
+    const actors = parseTBINBulk(raw);
+    const status = document.getElementById("tbin-bulk-status");
+    if (actors.length === 0) { status.textContent = "No valid rows found."; status.style.color = "#dc3545"; return; }
+    status.textContent = `Adding ${actors.length} actors...`;
+    const data = await api("admin-tbin", {
+      method: "POST",
+      body: JSON.stringify({ action: "bulk_add", project_id: currentProjectId, actors }),
+    });
+    if (data.error) {
+      status.textContent = `Error: ${data.error}`;
+      status.style.color = "#dc3545";
+    } else {
+      status.textContent = `Added ${data.inserted} actors.`;
+      status.style.color = "#28a745";
+      document.getElementById("tbin-bulk-input").value = "";
+      loadTBIN();
+    }
+  }
+
   // ─── Email Templates ───────────────────────────────────────────────────────
   const TEMPLATE_NAMES = ["initial_invite", "declined_notification", "reschedule_confirmation", "chase"];
   let templateCache = {};
@@ -478,20 +751,27 @@
   let quillEditor = null;
 
   function initQuill() {
-    if (quillEditor) return;
-    quillEditor = new Quill("#tmpl-editor-container", {
-      theme: "snow",
-      modules: {
-        toolbar: [
-          ["bold", "italic", "underline"],
-          [{ header: [1, 2, 3, false] }],
-          ["link"],
-          [{ list: "ordered" }, { list: "bullet" }],
-          ["clean"],
-        ],
-      },
-      placeholder: "Write your email body here...",
-    });
+    const toolbarOpts = [
+      ["bold", "italic", "underline"],
+      [{ "header": [1, 2, 3, false] }],
+      ["link"],
+      [{ "list": "ordered" }, { "list": "bullet" }],
+      ["clean"],
+    ];
+    if (!quillEditor) {
+      quillEditor = new Quill("#tmpl-editor-container", {
+        theme: "snow",
+        modules: { toolbar: toolbarOpts },
+        placeholder: "Write your email body here...",
+      });
+    }
+    if (!chaseQuillEditor) {
+      chaseQuillEditor = new Quill("#chase-editor-container", {
+        theme: "snow",
+        modules: { toolbar: toolbarOpts },
+        placeholder: "Compose your chase email...",
+      });
+    }
   }
 
   async function loadTemplates() {
@@ -510,7 +790,9 @@
     });
     const t = templateCache[name] || {};
     document.getElementById("tmpl-subject").value = t.subject || "";
-    if (quillEditor) quillEditor.root.innerHTML = t.html_body || "";
+    if (quillEditor) {
+      quillEditor.root.innerHTML = t.html_body || "";
+    }
     document.getElementById("tmpl-status").textContent = "";
   }
 
@@ -521,6 +803,7 @@
       alert("Both subject and body are required.");
       return;
     }
+
     const data = await api("admin-templates", {
       method: "POST",
       body: JSON.stringify({ project_id: currentProjectId, name: activeTemplate, subject, html_body }),
@@ -537,6 +820,74 @@
     setTimeout(() => { status.textContent = ""; }, 3000);
   }
 
+  // ─── Chase Emails ──────────────────────────────────────────────────────────
+  const CHASE_STATUSES = ["invite_sent", "auto_booked", "rescheduled"];
+
+  function renderChaseSlots() {
+    const slots = cachedSchedule.filter(s => CHASE_STATUSES.includes(s.status) && s.email);
+    const el = document.getElementById("chase-slots-list");
+    if (slots.length === 0) {
+      el.innerHTML = '<p class="loading-text">No chaseable slots.</p>';
+      updateChaseCount();
+      return;
+    }
+    el.innerHTML = `<div class="table-scroll"><table>
+      <thead><tr><th style="width:30px"><input type="checkbox" onchange="selectAllChase(this.checked)"></th><th>Date</th><th>Time</th><th>Actor</th><th>Role</th><th>Status</th></tr></thead>
+      <tbody>${slots.map(s => `<tr>
+        <td><input type="checkbox" class="chase-cb" value="${s.id}" onchange="updateChaseCount()"></td>
+        <td>${formatDate(s.slot_date)}</td>
+        <td>${s.slot_time?.slice(0,5)}</td>
+        <td>${s.first_name} ${s.last_name}</td>
+        <td>${s.role || ''}</td>
+        <td><span class="badge badge-${s.status}">${s.status.replace(/_/g,' ')}</span></td>
+      </tr>`).join("")}
+      </tbody></table></div>`;
+    updateChaseCount();
+  }
+
+  function selectAllChase(checked) {
+    document.querySelectorAll(".chase-cb").forEach(cb => cb.checked = checked);
+    updateChaseCount();
+  }
+
+  function updateChaseCount() {
+    const count = document.querySelectorAll(".chase-cb:checked").length;
+    const btn = document.getElementById("chase-send-btn");
+    btn.textContent = `Send chase to ${count} selected`;
+    btn.disabled = count === 0;
+  }
+
+  async function sendChase() {
+    const ids = [...document.querySelectorAll(".chase-cb:checked")].map(cb => cb.value);
+    if (ids.length === 0) return;
+    const subject = document.getElementById("chase-subject").value.trim();
+    const html_body = chaseQuillEditor ? chaseQuillEditor.root.innerHTML.trim() : "";
+    if (!subject || !html_body || html_body === "<p><br></p>") {
+      alert("Subject and body are required.");
+      return;
+    }
+    if (!confirm(`Send chase email to ${ids.length} actor(s)? This cannot be undone.`)) return;
+    const btn = document.getElementById("chase-send-btn");
+    const status = document.getElementById("chase-status");
+    btn.disabled = true;
+    btn.textContent = "Sending...";
+    const data = await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "send_chase", project_id: currentProjectId, slot_ids: ids, subject, html_body }),
+    });
+    if (data.error) {
+      status.textContent = `Error: ${data.error}`;
+      status.style.color = "#dc3545";
+    } else {
+      status.textContent = `Queued ${data.queued} email(s).${data.skipped ? ` ${data.skipped} skipped.` : ""}`;
+      status.style.color = "#28a745";
+      loadSchedule();
+      loadEmailQueue();
+    }
+    updateChaseCount();
+    setTimeout(() => { status.textContent = ""; }, 5000);
+  }
+
   // ─── Email Queue ───────────────────────────────────────────────────────────
   async function loadEmailQueue() {
     const data = await api("admin-email-queue");
@@ -544,7 +895,7 @@
     if (!data || data.error) { el.innerHTML = `<p style="color:red">${data?.error || "Error"}</p>`; return; }
     if (data.length === 0) { el.innerHTML = '<p class="loading-text">Queue is empty.</p>'; return; }
 
-    el.innerHTML = `<table>
+    el.innerHTML = `<div class="table-scroll"><table>
       <thead><tr><th>Recipient</th><th>Template</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead>
       <tbody>${data.map(r => `
         <tr>
@@ -555,7 +906,7 @@
           <td style="font-size:11px;color:#888;max-width:200px;overflow:hidden;text-overflow:ellipsis">${r.last_error || ''}</td>
         </tr>`).join("")}
       </tbody>
-    </table>`;
+    </table></div>`;
   }
 
   async function triggerEmailQueue() {
@@ -564,7 +915,22 @@
     loadEmailQueue();
   }
 
+  // ─── Gmail Re-auth ─────────────────────────────────────────────────────────
+  async function startGmailReauth() {
+    const data = await api("admin-gmail-auth");
+    if (data.error) { alert("Error: " + data.error); return; }
+    if (!data.url) { alert("Could not generate auth URL."); return; }
+    window.open(data.url, "_blank");
+    alert("Authorize access in the new tab. The page will show you a new refresh token to copy into Supabase secrets.");
+  }
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
+  function copyLink(url) {
+    navigator.clipboard.writeText(url)
+      .then(() => alert("Link copied to clipboard!"))
+      .catch(() => prompt("Copy this link:", url));
+  }
+
   function formatDate(d) {
     if (!d) return "";
     return new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", {
