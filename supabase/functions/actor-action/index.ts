@@ -258,7 +258,7 @@ async function fillFromTBIN(
         "Magic Link":  newShortLink,
       },
       cc,
-      idempotency_key: `${slotId}:initial_invite:auto:${c.email}`,
+      idempotency_key: `${slotId}:initial_invite:auto:${Date.now()}`,
     }, { onConflict: "idempotency_key", ignoreDuplicates: true });
   }
 }

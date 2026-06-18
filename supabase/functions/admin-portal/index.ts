@@ -100,6 +100,8 @@ const HTML = `<!DOCTYPE html>
     /* Quill editor overrides */
     #tmpl-editor-container { background: white; }
     #tmpl-editor-container .ql-editor { min-height: 200px; font-family: Arial, sans-serif; font-size: 14px; }
+    #chase-editor-container { background: white; }
+    #chase-editor-container .ql-editor { min-height: 150px; font-family: Arial, sans-serif; font-size: 14px; }
   </style>
   <link href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" rel="stylesheet">
 </head>
@@ -178,6 +180,29 @@ const HTML = `<!DOCTYPE html>
     </div>
 
     <div id="schedule-table"><p class="loading-text">Loading schedule...</p></div>
+  </div>
+
+  <!-- Chase Emails -->
+  <div class="card" id="chase-card" style="display:none">
+    <h2>Chase Emails</h2>
+    <div id="chase-slots-list"><p class="loading-text">No chaseable slots.</p></div>
+    <div style="margin-top:12px">
+      <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn-secondary" style="font-size:12px;padding:5px 12px" onclick="selectAllChase(true)">Select All</button>
+        <button class="btn-secondary" style="font-size:12px;padding:5px 12px" onclick="selectAllChase(false)">None</button>
+      </div>
+      <label style="font-size:13px;font-weight:bold;display:block;margin-bottom:4px">Subject:</label>
+      <input type="text" id="chase-subject" style="width:100%;margin-bottom:10px">
+      <label style="font-size:13px;font-weight:bold;display:block;margin-bottom:4px">Body:</label>
+      <div id="chase-editor-container"></div>
+      <p style="color:#666;font-size:12px;margin:8px 0 0">
+        Placeholders: <code>{{First Name}}</code> <code>{{Second Name}}</code> <code>{{Agent}}</code> <code>{{Role}}</code> <code>{{Date}}</code> <code>{{Time}}</code> <code>{{Magic Link}}</code>
+      </p>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <button class="btn-primary" id="chase-send-btn" onclick="sendChase()" disabled>Send chase to 0 selected</button>
+        <span class="status-msg" id="chase-status"></span>
+      </div>
+    </div>
   </div>
 
   <!-- TBIN Queue -->
@@ -271,6 +296,8 @@ const HTML = `<!DOCTYPE html>
   let currentProjectTBINPaused = false;
   let allProjects = [];
   let editingSlotId = null;
+  let cachedSchedule = [];
+  let chaseQuillEditor = null;
 
   function headers() {
     return {
@@ -302,8 +329,13 @@ const HTML = `<!DOCTYPE html>
     populateProjectDropdown(data);
     document.getElementById("email-queue-card").style.display = "block";
     initQuill();
-    loadTemplates();
     loadEmailQueue();
+    // Restore last selected project
+    const lastProjectId = localStorage.getItem("lastProjectId");
+    if (lastProjectId && allProjects.find(p => p.id === lastProjectId)) {
+      document.getElementById("project-select").value = lastProjectId;
+      loadProject();
+    }
     return true;
   }
 
@@ -366,16 +398,19 @@ const HTML = `<!DOCTYPE html>
       document.getElementById("project-actions").style.display = "none";
       return;
     }
+    localStorage.setItem("lastProjectId", currentProjectId);
     const proj = allProjects.find(p => p.id === currentProjectId);
     currentProjectTBINPaused = proj?.tbin_paused ?? false;
     document.getElementById("project-actions").style.display = "block";
     document.getElementById("rename-input").value = "";
     document.getElementById("fill-card").style.display = "block";
     document.getElementById("schedule-card").style.display = "block";
+    document.getElementById("chase-card").style.display = "block";
     document.getElementById("tbin-card").style.display = "block";
     updateTBINPauseUI();
     loadSchedule();
     loadTBIN();
+    loadTemplates();
   }
 
   async function renameProject() {
@@ -464,9 +499,10 @@ const HTML = `<!DOCTYPE html>
   // ─── Schedule ──────────────────────────────────────────────────────────────
   async function loadSchedule() {
     const data = await api(\`admin-schedule?project_id=\${currentProjectId}\`);
+    cachedSchedule = Array.isArray(data) ? data : [];
     const el = document.getElementById("schedule-table");
-    if (!data || data.error) { el.innerHTML = \`<p style="color:red">\${data?.error || "Error"}</p>\`; return; }
-    if (data.length === 0) { el.innerHTML = '<p class="loading-text">No slots yet. Add some above.</p>'; return; }
+    if (!data || data.error) { el.innerHTML = \`<p style="color:red">\${data?.error || "Error"}</p>\`; renderChaseSlots(); return; }
+    if (data.length === 0) { el.innerHTML = '<p class="loading-text">No slots yet. Add some above.</p>'; renderChaseSlots(); return; }
 
     el.innerHTML = \`<div class="table-scroll"><table>
       <thead><tr><th>Date</th><th>Time</th><th>Actor</th><th class="col-agent">Agent</th><th>Role</th><th>Status</th><th>Link</th><th></th></tr></thead>
@@ -505,6 +541,7 @@ const HTML = `<!DOCTYPE html>
       }).join("")}
       </tbody>
     </table></div>\`;
+    renderChaseSlots();
   }
 
   function startEdit(slotId) { editingSlotId = slotId; loadSchedule(); }
@@ -715,24 +752,32 @@ const HTML = `<!DOCTYPE html>
   let quillEditor = null;
 
   function initQuill() {
-    if (quillEditor) return;
-    quillEditor = new Quill("#tmpl-editor-container", {
-      theme: "snow",
-      modules: {
-        toolbar: [
-          ["bold", "italic", "underline"],
-          [{ "header": [1, 2, 3, false] }],
-          ["link"],
-          [{ "list": "ordered" }, { "list": "bullet" }],
-          ["clean"],
-        ],
-      },
-      placeholder: "Write your email body here...",
-    });
+    const toolbarOpts = [
+      ["bold", "italic", "underline"],
+      [{ "header": [1, 2, 3, false] }],
+      ["link"],
+      [{ "list": "ordered" }, { "list": "bullet" }],
+      ["clean"],
+    ];
+    if (!quillEditor) {
+      quillEditor = new Quill("#tmpl-editor-container", {
+        theme: "snow",
+        modules: { toolbar: toolbarOpts },
+        placeholder: "Write your email body here...",
+      });
+    }
+    if (!chaseQuillEditor) {
+      chaseQuillEditor = new Quill("#chase-editor-container", {
+        theme: "snow",
+        modules: { toolbar: toolbarOpts },
+        placeholder: "Compose your chase email...",
+      });
+    }
   }
 
   async function loadTemplates() {
-    const data = await api("admin-templates");
+    if (!currentProjectId) return;
+    const data = await api(\`admin-templates?project_id=\${currentProjectId}\`);
     templateCache = {};
     (Array.isArray(data) ? data : []).forEach(t => { templateCache[t.name] = t; });
     showTemplate(activeTemplate);
@@ -762,7 +807,7 @@ const HTML = `<!DOCTYPE html>
 
     const data = await api("admin-templates", {
       method: "POST",
-      body: JSON.stringify({ name: activeTemplate, subject, html_body }),
+      body: JSON.stringify({ project_id: currentProjectId, name: activeTemplate, subject, html_body }),
     });
     const status = document.getElementById("tmpl-status");
     if (data.ok) {
@@ -774,6 +819,74 @@ const HTML = `<!DOCTYPE html>
       status.style.color = "#dc3545";
     }
     setTimeout(() => { status.textContent = ""; }, 3000);
+  }
+
+  // ─── Chase Emails ──────────────────────────────────────────────────────────
+  const CHASE_STATUSES = ["invite_sent", "auto_booked", "rescheduled"];
+
+  function renderChaseSlots() {
+    const slots = cachedSchedule.filter(s => CHASE_STATUSES.includes(s.status) && s.email);
+    const el = document.getElementById("chase-slots-list");
+    if (slots.length === 0) {
+      el.innerHTML = '<p class="loading-text">No chaseable slots.</p>';
+      updateChaseCount();
+      return;
+    }
+    el.innerHTML = \`<div class="table-scroll"><table>
+      <thead><tr><th style="width:30px"><input type="checkbox" onchange="selectAllChase(this.checked)"></th><th>Date</th><th>Time</th><th>Actor</th><th>Role</th><th>Status</th></tr></thead>
+      <tbody>\${slots.map(s => \`<tr>
+        <td><input type="checkbox" class="chase-cb" value="\${s.id}" onchange="updateChaseCount()"></td>
+        <td>\${formatDate(s.slot_date)}</td>
+        <td>\${s.slot_time?.slice(0,5)}</td>
+        <td>\${s.first_name} \${s.last_name}</td>
+        <td>\${s.role || ''}</td>
+        <td><span class="badge badge-\${s.status}">\${s.status.replace(/_/g,' ')}</span></td>
+      </tr>\`).join("")}
+      </tbody></table></div>\`;
+    updateChaseCount();
+  }
+
+  function selectAllChase(checked) {
+    document.querySelectorAll(".chase-cb").forEach(cb => cb.checked = checked);
+    updateChaseCount();
+  }
+
+  function updateChaseCount() {
+    const count = document.querySelectorAll(".chase-cb:checked").length;
+    const btn = document.getElementById("chase-send-btn");
+    btn.textContent = \`Send chase to \${count} selected\`;
+    btn.disabled = count === 0;
+  }
+
+  async function sendChase() {
+    const ids = [...document.querySelectorAll(".chase-cb:checked")].map(cb => cb.value);
+    if (ids.length === 0) return;
+    const subject = document.getElementById("chase-subject").value.trim();
+    const html_body = chaseQuillEditor ? chaseQuillEditor.root.innerHTML.trim() : "";
+    if (!subject || !html_body || html_body === "<p><br></p>") {
+      alert("Subject and body are required.");
+      return;
+    }
+    if (!confirm(\`Send chase email to \${ids.length} actor(s)? This cannot be undone.\`)) return;
+    const btn = document.getElementById("chase-send-btn");
+    const status = document.getElementById("chase-status");
+    btn.disabled = true;
+    btn.textContent = "Sending...";
+    const data = await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "send_chase", project_id: currentProjectId, slot_ids: ids, subject, html_body }),
+    });
+    if (data.error) {
+      status.textContent = \`Error: \${data.error}\`;
+      status.style.color = "#dc3545";
+    } else {
+      status.textContent = \`Queued \${data.queued} email(s).\${data.skipped ? \` \${data.skipped} skipped.\` : ""}\`;
+      status.style.color = "#28a745";
+      loadSchedule();
+      loadEmailQueue();
+    }
+    updateChaseCount();
+    setTimeout(() => { status.textContent = ""; }, 5000);
   }
 
   // ─── Email Queue ───────────────────────────────────────────────────────────

@@ -49,6 +49,68 @@ Deno.serve(async (req: Request) => {
         .select("id, name, tbin_paused")
         .single();
       if (error) return json({ error: error.message }, 500);
+
+      // Seed default email templates for the new project
+      const pid = data.id;
+      const defaults = [
+        {
+          project_id: pid,
+          name: "initial_invite",
+          subject: "Audition for {{First Name}} {{Second Name}}",
+          html_body: `<p>Hello,</p>
+<p>Thank you so much for submitting {{First Name}} {{Second Name}} for the upcoming auditions.</p>
+<p>We would like to see {{First Name}} as follows:</p>
+<p><strong>ROLE:</strong> {{Role}}</p>
+<p>Please note that audition times for this project can be rescheduled via the link at the bottom of this email.</p>
+<p><strong>{{Date}}</strong><br>at<br><strong>{{Time}}</strong></p>
+<p><strong>Going to:</strong><br>[Venue name and address]</p>
+<p><strong>TO PREPARE</strong><br>[Preparation instructions]</p>
+<p>I would appreciate it if you could confirm whether {{First Name}} will be able to make it by clicking on the appropriate link below:</p>
+<p>{{Magic Link}}</p>
+<p>Best wishes,</p>
+<p>Dan</p>`,
+        },
+        {
+          project_id: pid,
+          name: "chase",
+          subject: "Reminder: Audition for {{First Name}} {{Second Name}}",
+          html_body: `<p>Hello,</p>
+<p>Just a gentle reminder regarding the audition for {{First Name}} {{Second Name}}.</p>
+<p><strong>ROLE:</strong> {{Role}}</p>
+<p><strong>{{Date}}</strong> at <strong>{{Time}}</strong></p>
+<p>Could you please confirm whether {{First Name}} will be attending by clicking on the appropriate link below:</p>
+<p>{{Magic Link}}</p>
+<p>Best wishes,</p>
+<p>Dan</p>`,
+        },
+        {
+          project_id: pid,
+          name: "declined_notification",
+          subject: "Audition Update: {{First Name}} {{Second Name}}",
+          html_body: `<p>Hello,</p>
+<p>This is to let you know that {{First Name}} {{Second Name}} has unfortunately declined the audition.</p>
+<p><strong>ROLE:</strong> {{Role}}</p>
+<p><strong>{{Date}}</strong> at <strong>{{Time}}</strong></p>
+<p>Best wishes,</p>
+<p>Dan</p>`,
+        },
+        {
+          project_id: pid,
+          name: "reschedule_confirmation",
+          subject: "Audition Rescheduled: {{First Name}} {{Second Name}}",
+          html_body: `<p>Hello,</p>
+<p>This is to confirm that the audition for {{First Name}} {{Second Name}} has been rescheduled.</p>
+<p><strong>ROLE:</strong> {{Role}}</p>
+<p>The new audition time is:</p>
+<p><strong>{{Date}}</strong><br>at<br><strong>{{Time}}</strong></p>
+<p>{{Magic Link}}</p>
+<p>Best wishes,</p>
+<p>Dan</p>`,
+        },
+      ];
+      const { error: tmplErr } = await supabase.from("email_templates").insert(defaults);
+      if (tmplErr) console.error("Failed to seed default templates:", tmplErr.message);
+
       return json(data);
     }
 

@@ -48,7 +48,11 @@ async function sendGmailEmail(
     `MIME-Version: 1.0`,
     `Content-Type: text/html; charset=UTF-8`,
   );
-  const message = [...headers, ``, htmlBody].join("\r\n");
+  const emailHtml = htmlBody
+    .replace(/<p[^>]*><br\s*\/?><\/p>/gi, '<br>')
+    .replace(/<p[^>]*>/gi, '')
+    .replace(/<\/p>/gi, '<br>');
+  const message = [...headers, ``, emailHtml].join("\r\n");
 
   const encoded = btoa(unescape(encodeURIComponent(message)))
     .replace(/\+/g, "-")
@@ -154,13 +158,20 @@ Deno.serve(async (req: Request) => {
   // 5. Send all emails in parallel
   const results = await Promise.allSettled(
     rows.map(async (row) => {
-      const tmplKey = `${row.project_id}:${row.template_name}`;
-      const tmpl = templateMap[tmplKey];
-      if (!tmpl) throw new Error(`Template not found: ${tmplKey}. Create it in the admin portal.`);
-
       const vars = row.template_vars as Record<string, string>;
-      const subject  = renderTemplate(tmpl.subject, vars);
-      const htmlBody = renderTemplate(tmpl.html_body, vars);
+      let subject: string, htmlBody: string;
+
+      if (vars.__custom_subject && vars.__custom_html_body) {
+        const { __custom_subject: rawSubject, __custom_html_body: rawBody, ...cleanVars } = vars;
+        subject  = renderTemplate(rawSubject, cleanVars);
+        htmlBody = renderTemplate(rawBody, cleanVars);
+      } else {
+        const tmplKey = `${row.project_id}:${row.template_name}`;
+        const tmpl = templateMap[tmplKey];
+        if (!tmpl) throw new Error(`Template not found: ${tmplKey}. Create it in the admin portal.`);
+        subject  = renderTemplate(tmpl.subject, vars);
+        htmlBody = renderTemplate(tmpl.html_body, vars);
+      }
 
       console.log(`Sending: to=${row.recipient_email} template=${row.template_name} subject="${subject}"`);
       const msgId = await sendGmailEmail(accessToken, row.recipient_email as string, subject, htmlBody, fromName, fromEmail, row.cc as string | null);

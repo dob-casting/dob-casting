@@ -174,7 +174,7 @@ Deno.serve(async (req: Request) => {
               "Magic Link":  autoLink,
             },
             cc,
-            idempotency_key: `${slot.id}:initial_invite:admin_remove:${c.email}`,
+            idempotency_key: `${slot.id}:initial_invite:admin_remove:${Date.now()}`,
           }, { onConflict: "idempotency_key", ignoreDuplicates: true });
         }
 
@@ -191,6 +191,75 @@ Deno.serve(async (req: Request) => {
       }).catch(() => {});
 
       return json({ ok: true });
+    }
+
+    if (body.action === "send_chase") {
+      const { project_id, slot_ids, subject, html_body } = body;
+      if (!project_id || !Array.isArray(slot_ids) || slot_ids.length === 0) {
+        return json({ error: "project_id and slot_ids[] required" }, 400);
+      }
+      if (!subject?.trim() || !html_body?.trim() || html_body.trim() === "<p><br></p>") {
+        return json({ error: "Subject and body are required" }, 400);
+      }
+
+      // Re-query slots to get current data and validate status
+      const { data: slots, error: slotsErr } = await supabase
+        .from("slots")
+        .select("id, project_id, first_name, last_name, email, agent, role, slot_date, slot_time, short_link")
+        .in("id", slot_ids)
+        .eq("project_id", project_id)
+        .in("status", ["invite_sent", "auto_booked", "rescheduled"])
+        .not("email", "is", null);
+
+      if (slotsErr) return json({ error: slotsErr.message }, 500);
+      if (!slots || slots.length === 0) return json({ queued: 0, skipped: slot_ids.length });
+
+      const { data: proj } = await supabase
+        .from("projects").select("cc_email").eq("id", project_id).single();
+      const cc = proj?.cc_email || null;
+
+      const now = Date.now();
+      const rows = slots.map((slot: Record<string, unknown>, i: number) => {
+        const dateStr = slot.slot_date as string;
+        const timeStr = (slot.slot_time as string).slice(0, 5);
+        const formattedDate = new Date(dateStr).toLocaleDateString("en-GB", {
+          weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
+        });
+        return {
+          slot_id: slot.id,
+          project_id,
+          recipient_email: slot.email,
+          template_name: "manual_chase",
+          template_vars: {
+            "First Name": slot.first_name ?? "",
+            "Second Name": slot.last_name ?? "",
+            "Agent": slot.agent ?? "",
+            "Role": slot.role ?? "",
+            "Date": formattedDate,
+            "Time": timeStr,
+            "Magic Link": slot.short_link ?? "",
+            "__custom_subject": subject,
+            "__custom_html_body": html_body,
+          },
+          status: "pending",
+          cc,
+          idempotency_key: `manual-chase-${slot.id}-${now}-${i}`,
+        };
+      });
+
+      const { error: insertErr } = await supabase.from("email_queue").insert(rows);
+      if (insertErr) return json({ error: insertErr.message }, 500);
+
+      // Trigger email queue
+      const fnUrl  = `${Deno.env.get("SUPABASE_URL")}/functions/v1/process-email-queue`;
+      const svcKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      fetch(fnUrl, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${svcKey}`, "Content-Type": "application/json" },
+        body: "{}",
+      }).catch(() => {});
+
+      return json({ queued: slots.length, skipped: slot_ids.length - slots.length });
     }
   }
 
