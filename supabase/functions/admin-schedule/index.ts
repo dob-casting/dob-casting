@@ -4,6 +4,7 @@
 //   { action: "bulk_add_slots", project_id, slots: [{slot_date, slot_time}] }
 //   { action: "add_slot",       project_id, slot_date, slot_time }
 //   { action: "edit_slot",      slot_id, slot_date, slot_time }
+//   { action: "delete_slot",    slot_id }
 //   { action: "remove_actor",   slot_id }
 
 import { getSupabaseAdmin, json, cors, requireAdminAuth, buildShortLink } from "../_shared/supabase.ts";
@@ -22,7 +23,9 @@ Deno.serve(async (req: Request) => {
       .select("id, slot_date, slot_time, first_name, last_name, email, agent, role, status, magic_token")
       .eq("project_id", projectId)
       .order("slot_date", { ascending: true })
-      .order("slot_time", { ascending: true });
+      .order("slot_time", { ascending: true })
+      .order("last_name",  { ascending: true, nullsFirst: false })
+      .order("first_name", { ascending: true, nullsFirst: false });
 
     if (error) return json({ error: error.message }, 500);
     return json(data);
@@ -47,6 +50,19 @@ Deno.serve(async (req: Request) => {
         .from("slots")
         .update({ slot_date: body.slot_date, slot_time: body.slot_time })
         .eq("id", body.slot_id);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true });
+    }
+
+    if (body.action === "delete_slot") {
+      const { data: slot } = await supabase
+        .from("slots")
+        .select("id, status")
+        .eq("id", body.slot_id)
+        .single();
+      if (!slot) return json({ error: "Slot not found" }, 404);
+      if (slot.status !== "empty") return json({ error: "Only empty slots can be deleted" }, 400);
+      const { error } = await supabase.from("slots").delete().eq("id", body.slot_id);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true });
     }

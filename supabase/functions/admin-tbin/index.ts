@@ -4,6 +4,9 @@
 //   { action: "add",      project_id, first_name, last_name, email, agent, role }
 //   { action: "bulk_add", project_id, actors: [{first_name, last_name, email, agent, role}] }
 //   { action: "remove",   id }
+//   { action: "move_to_top", id, project_id }
+//   { action: "shuffle",  project_id }
+//   { action: "clear",    project_id }
 
 import { getSupabaseAdmin, json, cors, requireAdminAuth, buildShortLink } from "../_shared/supabase.ts";
 
@@ -63,9 +66,70 @@ Deno.serve(async (req: Request) => {
       return json({ inserted: rows.length });
     }
 
+    if (body.action === "clear") {
+      const { project_id } = body;
+      if (!project_id) return json({ error: "Missing project_id" }, 400);
+      const { error } = await supabase.from("tbin_queue").delete().eq("project_id", project_id);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true });
+    }
+
     if (body.action === "remove") {
       const { error } = await supabase.from("tbin_queue").delete().eq("id", body.id);
       if (error) return json({ error: error.message }, 500);
+      return json({ ok: true });
+    }
+
+    if (body.action === "move_to_top") {
+      const { id, project_id } = body;
+      if (!id || !project_id) return json({ error: "Missing id or project_id" }, 400);
+
+      const { data: rows, error: fetchErr } = await supabase
+        .from("tbin_queue")
+        .select("id")
+        .eq("project_id", project_id)
+        .order("position", { ascending: true })
+        .order("created_at", { ascending: true });
+      if (fetchErr) return json({ error: fetchErr.message }, 500);
+      if (!rows?.length) return json({ ok: true });
+
+      // Put the target first, then the rest in their current order
+      const ordered = [id, ...rows.map(r => r.id).filter(rid => rid !== id)];
+
+      await Promise.all(
+        ordered.map((rid, idx) =>
+          supabase.from("tbin_queue").update({ position: idx + 1 }).eq("id", rid)
+        )
+      );
+
+      return json({ ok: true });
+    }
+
+    if (body.action === "shuffle") {
+      const { project_id } = body;
+      if (!project_id) return json({ error: "Missing project_id" }, 400);
+
+      const { data: rows, error: fetchErr } = await supabase
+        .from("tbin_queue")
+        .select("id")
+        .eq("project_id", project_id)
+        .order("position", { ascending: true })
+        .order("created_at", { ascending: true });
+      if (fetchErr) return json({ error: fetchErr.message }, 500);
+      if (!rows?.length) return json({ ok: true });
+
+      const ids = rows.map(r => r.id);
+      for (let i = ids.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+      }
+
+      await Promise.all(
+        ids.map((id, idx) =>
+          supabase.from("tbin_queue").update({ position: idx + 1 }).eq("id", id)
+        )
+      );
+
       return json({ ok: true });
     }
 
@@ -133,6 +197,73 @@ Deno.serve(async (req: Request) => {
           idempotency_key: `${slot.id}:initial_invite:manual_book:${entry.email}`,
         }, { onConflict: "idempotency_key", ignoreDuplicates: true });
       }
+
+      const fnUrl  = `${Deno.env.get("SUPABASE_URL")}/functions/v1/process-email-queue`;
+      const svcKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      fetch(fnUrl, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${svcKey}`, "Content-Type": "application/json" },
+        body: "{}",
+      }).catch(() => {});
+
+      return json({ ok: true });
+    }
+
+    if (body.action === "direct_book") {
+      const { project_id, first_name, last_name, email, agent, role, slot_id } = body;
+      if (!project_id || !first_name || !last_name || !email || !role || !slot_id) {
+        return json({ error: "Missing required fields" }, 400);
+      }
+
+      const { data: slot } = await supabase
+        .from("slots")
+        .select("id, project_id, slot_date, slot_time, status")
+        .eq("id", slot_id)
+        .single();
+      if (!slot) return json({ error: "Slot not found" }, 404);
+      if (slot.project_id !== project_id) return json({ error: "Slot is in a different project" }, 400);
+      if (slot.status !== "empty") return json({ error: "Slot is not empty" }, 409);
+
+      const { data: proj } = await supabase
+        .from("projects").select("cc_email").eq("id", project_id).single();
+      const cc = proj?.cc_email || null;
+
+      const token = crypto.randomUUID();
+      const link  = await buildShortLink(token);
+
+      const { error: updateErr } = await supabase.from("slots").update({
+        first_name,
+        last_name,
+        email,
+        agent:       agent || null,
+        role,
+        status:      "auto_booked",
+        magic_token: token,
+        short_link:  link,
+      }).eq("id", slot.id);
+      if (updateErr) return json({ error: updateErr.message }, 500);
+
+      const dateStr = new Date(slot.slot_date).toLocaleDateString("en-GB", {
+        weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
+      });
+
+      await supabase.from("email_queue").upsert({
+        slot_id:         slot.id,
+        project_id,
+        recipient_email: email,
+        template_name:   "initial_invite",
+        template_vars: {
+          "First Name":  first_name,
+          "Second Name": last_name,
+          "Agent":       agent ?? "",
+          "Role":        role,
+          "Date":        dateStr,
+          "Time":        slot.slot_time.slice(0, 5),
+          "Magic Link":  link,
+        },
+        cc,
+        idempotency_key: `${slot.id}:initial_invite:direct_book:${email}`,
+      }, { onConflict: "idempotency_key", ignoreDuplicates: true });
 
       const fnUrl  = `${Deno.env.get("SUPABASE_URL")}/functions/v1/process-email-queue`;
       const svcKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;

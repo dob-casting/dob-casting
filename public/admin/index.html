@@ -179,6 +179,7 @@
       <button class="btn-secondary" onclick="toggleSlotForm()">+ Add Slot</button>
       <button class="btn-secondary" onclick="toggleBulkForm()">Bulk Add</button>
       <button class="btn-secondary" onclick="loadSchedule()">Refresh</button>
+      <button class="btn-secondary" onclick="exportScheduleCSV()">Export CSV</button>
     </div>
 
     <div id="bulk-add-form" style="display:none;margin-top:12px;padding:12px;background:#f8f9fa;border-radius:6px;">
@@ -231,6 +232,9 @@
         <h2 style="margin:0;border:none;padding:0">TBIN Queue</h2>
         <span id="tbin-pause-label" style="font-size:13px"></span>
         <button id="tbin-pause-btn" style="font-size:12px;padding:5px 12px" onclick="event.stopPropagation();toggleTBINPause()"></button>
+        <button id="tbin-shuffle-btn" style="font-size:12px;padding:5px 12px" onclick="event.stopPropagation();shuffleTBIN()">Shuffle</button>
+        <button style="font-size:12px;padding:5px 12px" onclick="event.stopPropagation();exportTBINCSV()">Export CSV</button>
+        <button class="btn-danger" style="font-size:12px;padding:5px 12px" onclick="event.stopPropagation();clearTBIN()">Clear All</button>
       </div>
     </div>
     <div class="collapsible-body">
@@ -265,6 +269,22 @@
     </div>
   </div>
 
+  <!-- Copy Templates Modal -->
+  <div id="copy-tmpl-overlay" class="book-modal-overlay" style="display:none" onclick="closeCopyTemplatesModal()">
+    <div class="book-modal" onclick="event.stopPropagation()">
+      <h3 style="margin:0 0 12px">Copy templates from</h3>
+      <select id="copy-tmpl-select" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;font-size:14px">
+        <option value="">— Select a project —</option>
+      </select>
+      <p style="font-size:13px;color:#666;margin:10px 0 0">All 4 templates will be copied and will overwrite the current project's templates.</p>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn-primary" onclick="confirmCopyTemplates()">Copy</button>
+        <button class="btn-secondary" onclick="closeCopyTemplatesModal()">Cancel</button>
+        <span id="copy-tmpl-status" style="font-size:13px;align-self:center"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- Email Templates -->
   <div class="card collapsed" id="templates-card">
     <h2 class="collapsible-header" onclick="toggleCollapse('templates-card')">Email Templates</h2>
@@ -293,6 +313,7 @@
     <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
       <button class="btn-primary" onclick="saveTemplate()">Save</button>
       <button class="btn-secondary" onclick="showTemplate(activeTemplate)">Cancel</button>
+      <button class="btn-secondary" onclick="openCopyTemplatesModal()">Copy from another project</button>
       <span class="status-msg" id="tmpl-status"></span>
     </div>
 
@@ -594,13 +615,37 @@
           <td>${linkCell}</td>
           <td style="white-space:nowrap">
             <button class="btn-secondary" style="padding:4px 10px;font-size:12px" onclick="startEdit('${s.id}')">Edit</button>
-            ${s.first_name ? `<button class="btn-danger" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="removeActor('${s.id}')">Remove</button>` : ''}
+            ${s.first_name ? `<button class="btn-danger" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="removeActor('${s.id}')">Remove</button>` : `<button class="btn-danger" style="padding:4px 10px;font-size:12px;margin-left:4px" onclick="deleteSlot('${s.id}')">Delete</button>`}
           </td>
         </tr>`;
       }).join("")}
       </tbody>
     </table></div>`;
     renderChaseSlots();
+  }
+
+  function exportScheduleCSV() {
+    if (cachedSchedule.length === 0) { alert("No schedule to export."); return; }
+    const rows = [...cachedSchedule].sort((a, b) =>
+      (a.slot_date || '').localeCompare(b.slot_date || '') ||
+      (a.slot_time || '').localeCompare(b.slot_time || '') ||
+      (a.first_name || '').localeCompare(b.first_name || '') ||
+      (a.last_name || '').localeCompare(b.last_name || '')
+    );
+    const esc = v => `"${(v || '').replace(/"/g, '""')}"`;
+    const header = "Date,Time,First Name,Last Name,Email,Agent,Role,Status";
+    const csv = [header, ...rows.map(s => {
+      const [y, m, d] = (s.slot_date || '').split('-');
+      const date = d && m && y ? `${d}/${m}/${y}` : s.slot_date || '';
+      const time = s.slot_time?.slice(0, 5) || '';
+      return [date, time, esc(s.first_name), esc(s.last_name), esc(s.email), esc(s.agent), esc(s.role), s.status || ''].join(',');
+    })].join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'schedule.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   function startEdit(slotId) { editingSlotId = slotId; loadSchedule(); }
@@ -702,6 +747,16 @@
     loadSchedule();
   }
 
+  async function deleteSlot(slotId) {
+    if (!confirm("Delete this empty slot?")) return;
+    const data = await api("admin-schedule", {
+      method: "POST",
+      body: JSON.stringify({ action: "delete_slot", slot_id: slotId }),
+    });
+    if (data.error) { alert("Error: " + data.error); return; }
+    loadSchedule();
+  }
+
   async function removeActor(slotId) {
     if (!confirm("Remove actor from this slot? They will be archived and TBIN will auto-fill.")) return;
     await api("admin-schedule", {
@@ -713,11 +768,14 @@
   }
 
   // ─── TBIN Queue ────────────────────────────────────────────────────────────
+  let cachedTBIN = [];
+
   async function loadTBIN() {
     if (!currentProjectId) return;
     const data = await api(`admin-tbin?project_id=${currentProjectId}`);
     const el = document.getElementById("tbin-list");
     if (!data || data.error) { el.innerHTML = `<p style="color:red">${data?.error || "Error"}</p>`; return; }
+    cachedTBIN = Array.isArray(data) ? data : [];
     if (data.length === 0) { el.innerHTML = '<p class="loading-text">Queue is empty.</p>'; return; }
 
     el.innerHTML = data.map((a, i) => `
@@ -730,6 +788,7 @@
           <div class="name">${a.first_name} ${a.last_name}${a.agent ? ` <span style="font-weight:normal;color:#888;font-size:13px">via ${a.agent}</span>` : ''}</div>
           <div class="role">${a.role} · <span class="email">${a.email}</span></div>
         </div>
+        ${i > 0 ? `<button class="btn-secondary" style="padding:4px 10px;font-size:12px" onclick="moveToTopTBIN('${a.id}')">&#8679; Top</button>` : ''}
         <button class="btn-primary" style="padding:4px 10px;font-size:12px" onclick="openBookModal('${a.id}')">Book In</button>
         <button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="removeFromTBIN('${a.id}')">Remove</button>
       </div>`).join("");
@@ -762,6 +821,37 @@
 
   async function reorderTBIN(id, direction) {
     await api("admin-tbin", { method: "POST", body: JSON.stringify({ action: "reorder", id, direction }) });
+    loadTBIN();
+  }
+
+  async function moveToTopTBIN(id) {
+    await api("admin-tbin", { method: "POST", body: JSON.stringify({ action: "move_to_top", id, project_id: currentProjectId }) });
+    loadTBIN();
+  }
+
+  async function shuffleTBIN() {
+    await api("admin-tbin", { method: "POST", body: JSON.stringify({ action: "shuffle", project_id: currentProjectId }) });
+    loadTBIN();
+  }
+
+  function exportTBINCSV() {
+    if (!cachedTBIN.length) { alert("Queue is empty."); return; }
+    const esc = v => `"${(v || '').replace(/"/g, '""')}"`;
+    const header = "Position,First Name,Last Name,Agent,Email,Role";
+    const csv = [header, ...cachedTBIN.map((a, i) =>
+      [i + 1, esc(a.first_name), esc(a.last_name), esc(a.agent), esc(a.email), esc(a.role)].join(',')
+    )].join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const el = document.createElement('a');
+    el.href = URL.createObjectURL(blob);
+    el.download = 'tbin.csv';
+    el.click();
+    URL.revokeObjectURL(el.href);
+  }
+
+  async function clearTBIN() {
+    if (!confirm("Clear the entire TBIN queue? This cannot be undone.")) return;
+    await api("admin-tbin", { method: "POST", body: JSON.stringify({ action: "clear", project_id: currentProjectId }) });
     loadTBIN();
   }
 
@@ -930,6 +1020,50 @@
       status.style.color = "#dc3545";
     }
     setTimeout(() => { status.textContent = ""; }, 3000);
+  }
+
+  function openCopyTemplatesModal() {
+    const sel = document.getElementById("copy-tmpl-select");
+    sel.innerHTML = '<option value="">— Select a project —</option>';
+    allProjects.filter(p => p.id !== currentProjectId).forEach(p => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.name;
+      sel.appendChild(opt);
+    });
+    document.getElementById("copy-tmpl-status").textContent = "";
+    document.getElementById("copy-tmpl-overlay").style.display = "flex";
+  }
+
+  function closeCopyTemplatesModal() {
+    document.getElementById("copy-tmpl-overlay").style.display = "none";
+  }
+
+  async function confirmCopyTemplates() {
+    const sourceId = document.getElementById("copy-tmpl-select").value;
+    const status = document.getElementById("copy-tmpl-status");
+    if (!sourceId) { status.textContent = "Please select a project."; status.style.color = "#dc3545"; return; }
+
+    status.textContent = "Copying..."; status.style.color = "#555";
+    const templates = await api(`admin-templates?project_id=${sourceId}`);
+    if (!Array.isArray(templates) || templates.length === 0) {
+      status.textContent = "No templates found in that project."; status.style.color = "#dc3545"; return;
+    }
+
+    const results = await Promise.all(templates.map(t =>
+      api("admin-templates", {
+        method: "POST",
+        body: JSON.stringify({ project_id: currentProjectId, name: t.name, subject: t.subject, html_body: t.html_body }),
+      })
+    ));
+
+    if (results.some(r => r.error)) {
+      status.textContent = "Some templates failed to copy."; status.style.color = "#dc3545"; return;
+    }
+
+    await loadTemplates();
+    status.textContent = `${templates.length} templates copied.`; status.style.color = "#28a745";
+    setTimeout(closeCopyTemplatesModal, 1500);
   }
 
   // ─── Chase Emails ──────────────────────────────────────────────────────────
